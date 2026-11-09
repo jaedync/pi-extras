@@ -12,7 +12,7 @@
  * The test copies a few lines that it cannot run: the message_end and
  * reconcile handlers of extensions/subagents.ts:337-360, Host.rebind
  * (host-state.ts:230-236), Host.close's drain and handOverMail
- * (host-state.ts:269-275, :295-301) and postKeptMail's resend
+ * (host-state.ts:269-275, :317-323) and postKeptMail's resend
  * (host-state.ts:326-332). Pi is a fake that follows the model's Pi rules
  * (sendCustomMessage, as:1844-1883; the deferred actions, as:683-701). The
  * replay does not check those rules against Pi: repro-f1.mts does that in a
@@ -235,10 +235,14 @@ function makeWorld() {
 		async compactFail(s, before) {
 			// session_compact_failed (as:2331-2350): no reminder came, so the model took `aborted` (or nothing was owed).
 			const reminded = s.created.includes("rem") && !before.created.includes("rem");
-			await emit("session_compact_failed", { reason: "manual", aborted: !reminded });
+			failNext = picked(s, "throws") === true;
+			// Pi clears the compaction state (as:2335) before it emits the event (as:2344), so the reminder can wake main at once.
 			pi.compacting = false;
+			await emit("session_compact_failed", { reason: "manual", aborted: !reminded });
 		},
 		async compactStart() { pi.compacting = true; await emit("session_before_compact", { reason: "manual" }); },
+		// An extension that loads before ours cancels: Pi stops the emit there (runner.js:820-824), so our handler does not run.
+		compactStartCancelFirst() { pi.compacting = true; },
 		async compactEnd(s) {
 			failNext = picked(s, "throws") === true;
 			if (s.unread.length === 0) pi.cut = pi.entries.length;
@@ -256,7 +260,7 @@ function makeWorld() {
 			mail.retry();
 		},
 		fallbackClose() {
-			// Host.close, host-state.ts:269-275, and handOverMail (:295-301) with no module bound.
+			// Host.close, host-state.ts:269-275, and handOverMail (:317-323) with no module bound.
 			const live = binding.beginClose();
 			const items = mail.drain();
 			kept = live ? items.filter(({ message }) => { try { live.send(message, { triggerTurn: false }); return false; } catch { return true; } }) : [...items];

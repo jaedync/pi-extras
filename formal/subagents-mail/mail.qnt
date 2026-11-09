@@ -28,9 +28,18 @@ module mail {
   // mark when the event says the run was aborted (as:686-688 passes
   // `aborted`; main-watch.ts:119-124 reads only stoppedRun and checked).
   pure val STOP_FROM_SETTLED_EVENT = false
-  // Fix variant for finding F4: a manual compaction that fails or is
+  // First fix variant for finding F4: a manual compaction that fails or is
   // cancelled still reminds main (main-watch.ts:142 passes `!event.aborted`).
+  // It reads compactionStopped, which our session_before_compact handler sets.
+  // Pi stops that emit at the first handler that cancels (runner.js:820-824),
+  // so this fix fails when the cancelling extension loads first (round 2, N1;
+  // check f4-old-fix-handler-order).
   pure val REMIND_ON_FAILED_COMPACT = false
+  // Sound fix variant for finding F4: session_compact_failed also computes
+  // "a compaction stopped this run" from the stop mark itself (the test of
+  // main-watch.ts:138), and reminds whatever `aborted` says. It does not
+  // depend on whether our session_before_compact handler ran.
+  pure val REMIND_FROM_STOP_MARK = false
 
   // Mail ids. "a": a note (wakes main). "b": a relay of what the user told a
   // child (does not wake, deliver.ts:157-162). "r": the batched report
@@ -87,6 +96,7 @@ module mail {
   var compactPending: bool     // a /compact waits for its abort to finish (as:2230-2232)
   var promptWaiting: bool      // a user prompt in its preflight (input handlers ran, no run yet)
   var runAborted: bool         // _agentRunAbortRequested: what agent_settled's `aborted` says (as:686-688)
+  var compactCancelled: bool   // an extension that loads before ours cancelled the compaction, so our handler did not run
   // ---- The transcript ----
   var landed: str -> int       // mail entries in main's session
   var unread: Set[str]         // in main's context after its last assistant message (owed reads it)
@@ -200,7 +210,7 @@ module mail {
     compactionStopped' = compactionStopped, retrySoon' = retrySoon,
   }
   action keepPi: bool = all {
-    ours' = ours, bsContinue' = bsContinue, later' = later, runAborted' = runAborted, compacting' = compacting,
+    ours' = ours, bsContinue' = bsContinue, later' = later, compactCancelled' = compactCancelled, runAborted' = runAborted, compacting' = compacting,
     compactPending' = compactPending, promptWaiting' = promptWaiting,
   }
   action keepCounts: bool = all { excused' = excused, prompts' = prompts, aborts' = aborts, compactions' = compactions }
@@ -211,7 +221,7 @@ module mail {
     running' = false, settling' = false, grace' = false, checked' = false, stoppedRun' = false, stopMark' = false,
     compactionStopped' = false, retrySoon' = false,
     phase' = "idle", ours' = false, bsContinue' = false, deferred' = [], later' = [], prep' = [], pendingCustom' = [],
-    steerQ' = [], compacting' = false, compactPending' = false, promptWaiting' = false, runAborted' = false,
+    steerQ' = [], compacting' = false, compactPending' = false, promptWaiting' = false, runAborted' = false, compactCancelled' = false,
     landed' = IDS.mapBy(_ => 0), unread' = Set(), unreplied' = Set(), excused' = Set(), created' = Set(), mine' = Set(),
     reported' = false, prompts' = 0, aborts' = 0, compactions' = 0, reloads' = 0, fails' = 0,
   }
@@ -330,7 +340,7 @@ module mail {
       running' = running, settling' = settling, grace' = grace, checked' = checked,
       compactionStopped' = compactionStopped, retrySoon' = retrySoon,
       batch' = batch, batchTimer' = batchTimer, closed' = closed, mine' = mine, created' = created, reported' = reported,
-      later' = later, runAborted' = runAborted, compacting' = compacting, compactPending' = compactPending, promptWaiting' = promptWaiting,
+      later' = later, compactCancelled' = compactCancelled, runAborted' = runAborted, compacting' = compacting, compactPending' = compactPending, promptWaiting' = promptWaiting,
       keepHost, keepCounts,
     }
   }
@@ -354,7 +364,7 @@ module mail {
       steerQ' = steerQ, landed' = landed, unread' = unread, unreplied' = unreplied, stopMark' = stopMark,
       retryArmed' = retryArmed, fails' = fails,
       running' = running, grace' = grace, stoppedRun' = stoppedRun, compactionStopped' = compactionStopped, retrySoon' = retrySoon,
-      later' = later, runAborted' = runAborted, compacting' = compacting, compactPending' = compactPending, promptWaiting' = promptWaiting,
+      later' = later, compactCancelled' = compactCancelled, runAborted' = runAborted, compacting' = compacting, compactPending' = compactPending, promptWaiting' = promptWaiting,
       keepMail, keepHost, keepCounts,
     }
   }
@@ -378,7 +388,7 @@ module mail {
       checked' = if (bsContinue) false else checked,
       grace' = if (bsContinue) false else grace,
       stoppedRun' = stoppedRun, compactionStopped' = compactionStopped, retrySoon' = retrySoon,
-      later' = later, runAborted' = runAborted, compacting' = compacting, compactPending' = compactPending, promptWaiting' = promptWaiting,
+      later' = later, compactCancelled' = compactCancelled, runAborted' = runAborted, compacting' = compacting, compactPending' = compactPending, promptWaiting' = promptWaiting,
       keepMail, keepHost, keepCounts,
     }
   }
@@ -400,7 +410,7 @@ module mail {
       pending' = if (hostPhase == "served") reconciled(pending, b.landed) else pending,
       running' = false, settling' = false, grace' = false,
       checked' = checked, stoppedRun' = stoppedRun, compactionStopped' = compactionStopped, retrySoon' = retrySoon,
-      bsContinue' = bsContinue, later' = later, runAborted' = false, compacting' = compacting, compactPending' = compactPending, promptWaiting' = promptWaiting,
+      bsContinue' = bsContinue, later' = later, compactCancelled' = compactCancelled, runAborted' = false, compacting' = compacting, compactPending' = compactPending, promptWaiting' = promptWaiting,
       batch' = batch, batchTimer' = batchTimer, closed' = closed, mine' = mine, created' = created, reported' = reported,
       keepHost, keepCounts,
     }
@@ -423,7 +433,7 @@ module mail {
       },
       outbox' = outbox, owing' = owing, pendingCustom' = pendingCustom, steerQ' = steerQ, landed' = landed,
       unread' = unread, unreplied' = unreplied, stopMark' = stopMark, retryArmed' = retryArmed, fails' = fails,
-      runAborted' = false, bsContinue' = bsContinue, compacting' = compacting, compactPending' = compactPending, promptWaiting' = promptWaiting,
+      compactCancelled' = compactCancelled, runAborted' = false, bsContinue' = bsContinue, compacting' = compacting, compactPending' = compactPending, promptWaiting' = promptWaiting,
       keepMail, keepHost, keepWatch, keepCounts,
     }
   }
@@ -438,7 +448,7 @@ module mail {
     phase == "idle", not(compacting), not(compactPending), hostPhase == "served",
     not(promptWaiting), prompts < MAX_PROMPTS,
     prompts' = prompts + 1, promptWaiting' = true, grace' = true,
-    ours' = ours, bsContinue' = bsContinue, later' = later, runAborted' = runAborted, compacting' = compacting, compactPending' = compactPending,
+    ours' = ours, bsContinue' = bsContinue, later' = later, compactCancelled' = compactCancelled, runAborted' = runAborted, compacting' = compacting, compactPending' = compactPending,
     running' = running, settling' = settling, checked' = checked, stoppedRun' = stoppedRun,
     compactionStopped' = compactionStopped, retrySoon' = retrySoon,
     excused' = excused, aborts' = aborts, compactions' = compactions,
@@ -462,7 +472,7 @@ module mail {
     if (phase == "idle" and not(compacting)) all { phase' = "prep" } else all { phase' = phase },
     outbox' = outbox, owing' = owing, prep' = prep, deferred' = deferred, pendingCustom' = pendingCustom, steerQ' = steerQ,
     landed' = landed, unread' = unread, unreplied' = unreplied, stopMark' = stopMark, retryArmed' = retryArmed, fails' = fails,
-    ours' = ours, bsContinue' = bsContinue, later' = later, runAborted' = runAborted, compacting' = compacting, compactPending' = compactPending,
+    ours' = ours, bsContinue' = bsContinue, later' = later, compactCancelled' = compactCancelled, runAborted' = runAborted, compacting' = compacting, compactPending' = compactPending,
     keepMail, keepHost, keepWatch, keepCounts,
   }
   // INPUT_GRACE_MS passes (main-watch.ts:25, :151).
@@ -504,7 +514,7 @@ module mail {
       stoppedRun' = if (inBs) stoppedRun else true,
       checked' = if (inBs) true else checked,
       settling' = settlingAfter(inBs, ours, served, b, settling),
-      ours' = false, bsContinue' = false, runAborted' = true,
+      ours' = false, bsContinue' = false, compactCancelled' = compactCancelled, runAborted' = true,
       running' = running, grace' = grace,
       compactionStopped' = compactionStopped, retrySoon' = retrySoon,
       later' = later, compacting' = compacting, compactPending' = compactPending, promptWaiting' = promptWaiting,
@@ -526,7 +536,7 @@ module mail {
       stoppedRun' = if (inBs) stoppedRun else true,
       checked' = if (inBs) true else checked,
       settling' = settlingAfter(inBs, ours, true, b, settling),
-      ours' = false, bsContinue' = false, runAborted' = true,
+      ours' = false, bsContinue' = false, compactCancelled' = compactCancelled, runAborted' = true,
       running' = running, grace' = grace,
       compactionStopped' = compactionStopped, retrySoon' = retrySoon,
       later' = later, compacting' = compacting, promptWaiting' = promptWaiting,
@@ -539,7 +549,7 @@ module mail {
     phase == "idle", not(compacting), not(compactPending), not(promptWaiting), hostPhase == "served",
     compactions < MAX_COMPACTIONS,
     compactions' = compactions + 1, compactPending' = true,
-    ours' = ours, bsContinue' = bsContinue, later' = later, runAborted' = runAborted, compacting' = compacting, promptWaiting' = promptWaiting,
+    ours' = ours, bsContinue' = bsContinue, later' = later, compactCancelled' = compactCancelled, runAborted' = runAborted, compacting' = compacting, promptWaiting' = promptWaiting,
     prompts' = prompts, aborts' = aborts, excused' = excused,
     keepBox, keepMail, keepHost, keepWatch,
   }
@@ -552,6 +562,23 @@ module mail {
     compactionStopped' = stopMark,
     running' = running, settling' = settling, grace' = grace, checked' = checked, stoppedRun' = stoppedRun, retrySoon' = retrySoon,
     ours' = ours, bsContinue' = bsContinue, later' = later, runAborted' = runAborted, promptWaiting' = promptWaiting,
+    compactCancelled' = false,
+    keepBox, keepMail, keepHost, keepCounts,
+  }
+  // The same start, but an extension that loads before ours returns `cancel`
+  // from session_before_compact. Pi stops the emit at that handler
+  // (runner.js:820-824), so main-watch's handler (main-watch.ts:137-140) does
+  // not run, and compactionStopped keeps the false that compacted() left
+  // (main-watch.ts:81). The compaction then fails as cancelled (as:2263-2266).
+  // A cancel by an extension that loads after ours is compactStart, then
+  // compactFail(true).
+  action compactStartCancelFirst: bool = all {
+    compactPending, phase == "idle", deferred == [], later == [], not(compacting),
+    compacting' = true, compactPending' = false,
+    compactionStopped' = false,
+    running' = running, settling' = settling, grace' = grace, checked' = checked, stoppedRun' = stoppedRun, retrySoon' = retrySoon,
+    ours' = ours, bsContinue' = bsContinue, later' = later, runAborted' = runAborted, promptWaiting' = promptWaiting,
+    compactCancelled' = true,
     keepBox, keepMail, keepHost, keepCounts,
   }
   // session_compact: compacted(true) (main-watch.ts:79-85) runs while Pi
@@ -562,13 +589,14 @@ module mail {
     val w = { ...where0, compacting: true }
     val b = if (remindNow) sendWaiting(w, { ...box0, owing: Set(), outbox: outbox.append(REMINDER), fail: throws }) else box0
     all {
-      compacting,
+      compacting, not(compactCancelled),
       throws implies (fails < MAX_FAILS and remindNow),
       applyBox({ ...b, unread: if (drop) Set() else b.unread }, closed),
       created' = if (remindNow) created.union(Set(REMINDER)) else created,
       compacting' = false, compactionStopped' = false, retrySoon' = true,
       running' = running, settling' = settling, grace' = grace, checked' = checked, stoppedRun' = stoppedRun,
       ours' = ours, bsContinue' = bsContinue, later' = later, runAborted' = runAborted, compactPending' = compactPending, promptWaiting' = promptWaiting,
+      compactCancelled' = compactCancelled,
       pending' = pending, batch' = batch, batchTimer' = batchTimer, closed' = closed, mine' = mine, reported' = reported,
       keepHost, keepCounts,
     }
@@ -578,13 +606,18 @@ module mail {
   // returns `cancel` from session_before_compact, the user presses Esc during
   // the summary (`aborted` true), or the summary fails (`aborted` false).
   // session_compact_failed calls compacted(manual && !aborted) (main-watch.ts:142).
+  // Pi clears the compaction state (as:2335) before it emits the event
+  // (as:2344), so Pi is idle and the route is wake: a reminder starts a run.
+  // A compaction that an extension cancelled first has `aborted` true.
   action compactFail(abortedNow: bool, throws: bool): bool = {
-    val remindNow = compactionStopped and (REMIND_ON_FAILED_COMPACT or not(abortedNow))
+    val stopped = compactionStopped or (REMIND_FROM_STOP_MARK and stopMark)
+    val remindNow = stopped and (REMIND_ON_FAILED_COMPACT or REMIND_FROM_STOP_MARK or not(abortedNow))
       and owing != Set() and not(closed) and hostPhase == "served"
-    val w = { ...where0, compacting: true }
+    val w = { ...where0, compacting: false }
     val b = if (remindNow) sendWaiting(w, { ...box0, owing: Set(), outbox: outbox.append(REMINDER), fail: throws }) else box0
     all {
-      compacting,
+      compacting, compactCancelled implies abortedNow,
+      compactCancelled' = false,
       throws implies (fails < MAX_FAILS and remindNow),
       applyBox(b, closed),
       created' = if (remindNow) created.union(Set(REMINDER)) else created,
@@ -609,7 +642,7 @@ module mail {
     hostPhase' = "parked", reloads' = reloads + 1,
     ours' = if (phase == "settle") true else ours,
     gen' = gen, kept' = kept,
-    bsContinue' = bsContinue, later' = later, runAborted' = runAborted, compacting' = compacting, compactPending' = compactPending, promptWaiting' = promptWaiting,
+    bsContinue' = bsContinue, later' = later, compactCancelled' = compactCancelled, runAborted' = runAborted, compacting' = compacting, compactPending' = compactPending, promptWaiting' = promptWaiting,
     keepBox, keepMail, keepWatch, keepCounts,
   }
 
@@ -653,7 +686,7 @@ module mail {
   }
 
   // The new module opens a host from the index (serve.ts:451-458) and
-  // restore posts the kept mail once (host-state.ts:262-267, :304-311):
+  // restore posts the kept mail once (host-state.ts:262-267, :326-332):
   // resend remembers each item but a reminder and posts it (deliver.ts:242-249).
   action fallbackOpen(throws: bool): bool = {
     val w = { served: true, compacting: compacting, grace: false, running: false, settling: false }
@@ -707,6 +740,7 @@ module mail {
     compactMidRun,
     compactIdle,
     compactStart,
+    compactStartCancelFirst,
     reloadStart,
     fallbackClose,
   }
@@ -752,6 +786,8 @@ module mail {
   val witnessNoFail = fails == 0
   // An abort in the settle check after our handler ran: no new agent_end (F3).
   val witnessNoAbortInSettleCheck = not(phase == "settle" and runAborted and not(stoppedRun) and checked)
+  // An extension that loads before ours cancelled the compaction (N1).
+  val witnessNoCancelFirst = not(compactCancelled)
   val witnessNoHeldWhileParked = hostPhase != "parked" or outbox == []
   val witnessNoAdoptWithMail = not(hostPhase == "served" and reloads == 1 and gen == 1 and landed.get("a") == 1 and owing != Set())
 }

@@ -61,8 +61,8 @@
           "to": "pure val STOP_FROM_SETTLED_EVENT = true"
         },
         {
-          "from": "pure val REMIND_ON_FAILED_COMPACT = false",
-          "to": "pure val REMIND_ON_FAILED_COMPACT = true"
+          "from": "pure val REMIND_FROM_STOP_MARK = false",
+          "to": "pure val REMIND_FROM_STOP_MARK = true"
         },
         {
           "from": "pure val MAX_RELOADS = 1",
@@ -90,8 +90,8 @@
           "to": "pure val STOP_FROM_SETTLED_EVENT = true"
         },
         {
-          "from": "pure val REMIND_ON_FAILED_COMPACT = false",
-          "to": "pure val REMIND_ON_FAILED_COMPACT = true"
+          "from": "pure val REMIND_FROM_STOP_MARK = false",
+          "to": "pure val REMIND_FROM_STOP_MARK = true"
         },
         {
           "from": "pure val MAX_RELOADS = 1",
@@ -119,8 +119,8 @@
           "to": "pure val QUIET_KEEPS_MARK = true"
         },
         {
-          "from": "pure val REMIND_ON_FAILED_COMPACT = false",
-          "to": "pure val REMIND_ON_FAILED_COMPACT = true"
+          "from": "pure val REMIND_FROM_STOP_MARK = false",
+          "to": "pure val REMIND_FROM_STOP_MARK = true"
         },
         {
           "from": "pure val MAX_RELOADS = 1",
@@ -137,7 +137,7 @@
     },
     {
       "name": "f4-failed-compaction",
-      "why": "Finding F4 alone: the fixes of F1, F2 and F3 assumed; no reload, no failed send.",
+      "why": "Finding F4 alone: the fixes of F1, F2 and F3 assumed; no reload, no failed send. The compaction can be cancelled by an extension that loads before ours or after ours.",
       "replace": [
         {
           "from": "pure val OWE_WAKE_MAIL = false",
@@ -181,8 +181,8 @@
           "to": "pure val STOP_FROM_SETTLED_EVENT = true"
         },
         {
-          "from": "pure val REMIND_ON_FAILED_COMPACT = false",
-          "to": "pure val REMIND_ON_FAILED_COMPACT = true"
+          "from": "pure val REMIND_FROM_STOP_MARK = false",
+          "to": "pure val REMIND_FROM_STOP_MARK = true"
         },
         {
           "from": "pure val MAX_RELOADS = 1",
@@ -212,8 +212,8 @@
           "to": "pure val STOP_FROM_SETTLED_EVENT = true"
         },
         {
-          "from": "pure val REMIND_ON_FAILED_COMPACT = false",
-          "to": "pure val REMIND_ON_FAILED_COMPACT = true"
+          "from": "pure val REMIND_FROM_STOP_MARK = false",
+          "to": "pure val REMIND_FROM_STOP_MARK = true"
         },
         {
           "from": "pure val MAX_RELOADS = 1",
@@ -239,8 +239,8 @@
           "to": "pure val STOP_FROM_SETTLED_EVENT = true"
         },
         {
-          "from": "pure val REMIND_ON_FAILED_COMPACT = false",
-          "to": "pure val REMIND_ON_FAILED_COMPACT = true"
+          "from": "pure val REMIND_FROM_STOP_MARK = false",
+          "to": "pure val REMIND_FROM_STOP_MARK = true"
         },
         {
           "from": "pure val MAX_FAILS = 1",
@@ -252,6 +252,24 @@
         }
       ],
       "expect": "pass"
+    },
+    {
+      "name": "f4-old-fix-handler-order",
+      "base": "assume-fixes",
+      "why": "Round 2, N1: the first F4 fix (REMIND_ON_FAILED_COMPACT) reads compactionStopped, which our session_before_compact handler sets. When an extension that loads before ours cancels, Pi stops the emit at that handler (runner.js:820-824), so the fix sends no reminder. All other fixes as in assume-fixes.",
+      "replace": [
+        {
+          "from": "pure val REMIND_FROM_STOP_MARK = true",
+          "to": "pure val REMIND_FROM_STOP_MARK = false"
+        },
+        {
+          "from": "pure val REMIND_ON_FAILED_COMPACT = false",
+          "to": "pure val REMIND_ON_FAILED_COMPACT = true"
+        }
+      ],
+      "expect": {
+        "violates": "wokenForMail"
+      }
     },
     {
       "name": "mutant-failed-send-dropped",
@@ -453,6 +471,7 @@
       "witnessNoFail",
       "witnessNoHeldWhileParked",
       "witnessNoAbortInSettleCheck",
+      "witnessNoCancelFirst",
       "wokenForMail"
     ]
   }
