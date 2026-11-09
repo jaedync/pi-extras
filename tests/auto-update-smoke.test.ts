@@ -1,10 +1,11 @@
 /** The smoke test against the repo's real development Pi, with fixture packages. No network, no real agent dir. */
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { smokeTest, SMOKE_DIR_PREFIX, sweepSmokeDirs } from "../lib/auto-update/smoke.ts";
+import { fileURLToPath } from "node:url";
+import { SMOKE_DIR_PREFIX, SMOKE_RESERVE_MS, SMOKE_TIMEOUT_MS, smokeTest, sweepSmokeDirs } from "../lib/auto-update/smoke.ts";
 import { fixturePackage, piPrefix, removeTree } from "./support/auto-update-fixtures.ts";
 
 function scratch(t: test.TestContext): string {
@@ -93,10 +94,38 @@ test("a smoke Pi killed by a signal that the test did not send (for example the 
 	}
 });
 
-test("pi-extras itself passes the smoke test", async (t) => {
+test("a transform cache folder is the test Pi's $TMPDIR/jiti, outlives the test, and is absent without one", async (t) => {
+	const dir = scratch(t);
+	const seen = join(dir, "seen.json");
+	mkdirSync(join(dir, "pi", "bin"), { recursive: true });
+	// What Pi's jiti does: it writes its transforms to join(os.tmpdir(), "jiti").
+	writeFileSync(join(dir, "pi", "bin", "pi"), [
+		'const { appendFileSync, existsSync, mkdirSync, realpathSync, writeFileSync } = require("node:fs");',
+		'const cache = require("node:path").join(require("node:os").tmpdir(), "jiti");',
+		`appendFileSync(${JSON.stringify(seen)}, JSON.stringify(existsSync(cache) ? realpathSync(cache) : null) + "\\n");`,
+		'mkdirSync(cache, { recursive: true });',
+		'writeFileSync(require("node:path").join(cache, "a.mjs"), "// transformed");',
+		"process.exit(3);",
+		"",
+	].join("\n"));
+	writeFileSync(join(dir, "pi", "package.json"), JSON.stringify({ type: "commonjs" }));
+	const cache = join(dir, "jiti-cache");
+	await smokeTest({ piDir: join(dir, "pi"), packages: [], timeoutMs: 5_000, transformCache: cache });
+	await smokeTest({ piDir: join(dir, "pi"), packages: [], timeoutMs: 5_000 });
+	assert.deepEqual(readFileSync(seen, "utf8").trim().split("\n").map((line) => JSON.parse(line)), [realpathSync(cache), null]);
+	assert.equal(readFileSync(join(cache, "a.mjs"), "utf8"), "// transformed", "the cleanup of the test's temp folder keeps the cache");
+});
+
+// Pi transforms each TypeScript file of a package with jiti, and caches the result in TMPDIR, which is a new temp
+// folder in each smoke test. Cold, all of pi-extras took 40 s of CPU and 51 to 62 s on a loaded op01, past the 55 s
+// limit; warm it takes 6 to 9 s. The cache is keyed by each file's content, so a changed file is transformed again.
+// A cold cache (a new checkout) still pays the full cost once, so the test gets the cycle's own smoke limit.
+const SMOKE_TRANSFORM_CACHE = fileURLToPath(new URL("../node_modules/.cache/pi-extras-smoke-jiti", import.meta.url));
+
+test("pi-extras itself passes the smoke test", { timeout: SMOKE_RESERVE_MS }, async (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "au-smoke-x-"));
 	t.after(() => rmSync(dir, { recursive: true, force: true }));
-	const result = await smokeTest({ piDir: piPrefix(join(dir, "pi")), packages: [new URL("../", import.meta.url).pathname.replace(/\/$/, "")], timeoutMs: 55_000 });
+	const result = await smokeTest({ piDir: piPrefix(join(dir, "pi")), packages: [new URL("../", import.meta.url).pathname.replace(/\/$/, "")], timeoutMs: SMOKE_TIMEOUT_MS, transformCache: SMOKE_TRANSFORM_CACHE });
 	assert.deepEqual(result.ok ? "ok" : result.reason, "ok");
 });
 

@@ -13,7 +13,7 @@
  */
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -41,6 +41,14 @@ export interface SmokeInput {
 	readonly timeoutMs?: number;
 	/** The node binary to run Pi with. */
 	readonly node?: string;
+	/**
+	 * A folder for jiti's TypeScript transform cache. Pi's jiti keeps it in
+	 * `$TMPDIR/jiti`, and TMPDIR is the test's own new folder, so without one
+	 * each test transforms every file again. jiti takes no cache path from the
+	 * environment (JITI_FS_CACHE is only on or off), so `$TMPDIR/jiti` becomes
+	 * a link to this folder; the rest of TMPDIR stays the test's own.
+	 */
+	readonly transformCache?: string;
 }
 
 /**
@@ -234,6 +242,10 @@ export async function smokeTest(input: SmokeInput): Promise<SmokeResult> {
 	try {
 		const home = join(root, "home");
 		mkdirSync(join(home, "tmp"), { recursive: true });
+		if (input.transformCache) {
+			mkdirSync(input.transformCache, { recursive: true });
+			symlinkSync(input.transformCache, join(home, "tmp", "jiti"), "dir");
+		}
 		fake = await fakeAnthropic(reply);
 		const agentDir = join(home, ".pi", "agent");
 		writeAgent(agentDir, fake.port, input.packages);
