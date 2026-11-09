@@ -7,7 +7,8 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { withFileLock } from "../file-lock.ts";
+import { setTimeout as sleep } from "node:timers/promises";
+import { SHORT_LOCK, tryLock } from "../file-lock.ts";
 import { isOffline } from "../offline.ts";
 import type { LimitSnapshot } from "../limit-store.ts";
 import { STATUS_TIME_ZONE, type LimitEntry } from "../status-plus-logic.ts";
@@ -32,12 +33,14 @@ const LEDGER_MAX_AGE_MS = 8 * 86_400_000;
 const LEDGER_MIN_REFRESH_MS = 5_000;
 const RECENT_MODELS_MS = 7 * 86_400_000;
 /**
- * Polls and response events observe on Pi's main thread, so a busy state-file
- * lock is skipped quickly; the next observation records the change. A usage
- * call, which the user asked for, waits longer.
+ * A state-file lock is held for a few milliseconds. A busy one is tried again
+ * without blocking Pi's main thread, for up to this long; a usage call waits
+ * for those tries before it writes its notes.
  */
-const OBSERVE_LOCK_WAIT_MS = 100;
-const COLLECT_LOCK_WAIT_MS = 3_000;
+const LOCK_WAIT_MS = 1_000;
+const LOCK_RETRY_MS = 15;
+/** The ledger index: shared by the processes of this agent directory, so each byte of a session is parsed once. */
+const LEDGER_INDEX = "spend-index-v1.json";
 
 export interface CollectContext {
 	snapshots: Array<[string, LimitSnapshot]>;
@@ -181,7 +184,10 @@ export function createDollarsCollector(options: CollectorOptions) {
 	const fetchImpl = options.fetch ?? fetch;
 	const ledger: SpendLedger = createSpendLedger({
 		root: join(options.agentDir, "sessions"), maxAgeMs: LEDGER_MAX_AGE_MS, minRefreshMs: LEDGER_MIN_REFRESH_MS,
+		indexFile: join(options.agentDir, "usage-dollars", LEDGER_INDEX),
 	});
+	/** Later tries of state-file writes whose lock was busy; collect() waits for them. */
+	const retries = new Set<Promise<void>>();
 	// Steps whose last run failed (PROBLEM_NOTES keys); collect() reports them, and a later success clears them.
 	let problems = new Set<string>();
 	function mark(name: string, ok: boolean): void {
@@ -197,11 +203,12 @@ export function createDollarsCollector(options: CollectorOptions) {
 	/**
 	 * Change a shared state file, so processes that observe at the same time
 	 * keep each other's changes. Nothing new takes no lock. A change takes the
-	 * lock, reads the file again and saves. When the lock stays busy for
-	 * `waitMs`, the change still counts for this call, the write is skipped,
-	 * and the report names the file. An error from `change` goes to the caller.
+	 * lock, reads the file again and saves. A busy lock never blocks the
+	 * thread: the change still counts for this call, and later tries run on
+	 * timers for up to LOCK_WAIT_MS. When they all find the lock busy, the
+	 * report names the file. An error from `change` goes to the caller.
 	 */
-	function update<T>(file: string, read: (file: string) => T, change: (current: T) => T, waitMs: number): T {
+	function update<T>(file: string, read: (file: string) => T, change: (current: T) => T): T {
 		const current = read(file);
 		const next = change(current);
 		if (next === current) {
@@ -209,22 +216,56 @@ export function createDollarsCollector(options: CollectorOptions) {
 			mark(basename(file), true);
 			return current;
 		}
-		let locked = false;
-		try {
-			mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-			return withFileLock(file, () => {
-				locked = true;
+		/**
+		 * One try: the merged value under the lock, undefined while another
+		 * process holds it, or "failed" when the lock itself cannot be made.
+		 * An error from reading or changing the file goes to the caller.
+		 */
+		const apply = (): { value: T } | "failed" | undefined => {
+			let lock;
+			try {
+				lock = tryLock(`${file}.lock`, SHORT_LOCK);
+			} catch {
+				mark(basename(file), false);
+				return "failed";
+			}
+			if (!lock) return undefined;
+			try {
 				const fresh = read(file);
 				const merged = change(fresh);
 				if (merged !== fresh) save(file, merged);
 				else mark(basename(file), true);
-				return merged;
-			}, waitMs);
-		} catch (error) {
-			if (locked) throw error;
+				return { value: merged };
+			} finally {
+				lock.release();
+			}
+		};
+		try {
+			mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+		} catch {
 			mark(basename(file), false);
 			return next;
 		}
+		const first = apply();
+		if (first === "failed") return next;
+		if (first) return first.value;
+		const later = (async () => {
+			const deadline = Date.now() + LOCK_WAIT_MS;
+			while (Date.now() < deadline) {
+				await sleep(LOCK_RETRY_MS);
+				try {
+					if (apply()) return;
+				} catch {
+					// This call already returned; the report names the file instead.
+					mark(basename(file), false);
+					return;
+				}
+			}
+			mark(basename(file), false);
+		})();
+		retries.add(later);
+		void later.then(() => retries.delete(later));
+		return next;
 	}
 	/** Each observer runs on its own, so one failing step does not stop the other at every poll. */
 	function attempt<T>(name: string, run: () => T, fallback: () => T): T {
@@ -252,7 +293,7 @@ export function createDollarsCollector(options: CollectorOptions) {
 		return update(anchorFile, readAnchors, (stored) => readings.reduce((next, reading) => {
 			const anchor = advanceMeterDay(next[reading.provider], reading.usedUsd, reading.atMs, timeZone);
 			return anchor === next[reading.provider] ? next : { ...next, [reading.provider]: anchor };
-		}, stored), OBSERVE_LOCK_WAIT_MS);
+		}, stored));
 	}
 
 	/**
@@ -282,7 +323,7 @@ export function createDollarsCollector(options: CollectorOptions) {
 		const next = update(readingsFile, readReadings, (stored) => readings.reduce((current, { key, ...reading }) => {
 			const record = advanceReading(current[key], reading);
 			return record === current[key] ? current : { ...current, [key]: record };
-		}, stored), OBSERVE_LOCK_WAIT_MS);
+		}, stored));
 		return evidenceMap(next);
 	}
 
@@ -332,7 +373,7 @@ export function createDollarsCollector(options: CollectorOptions) {
 		}
 		if (sizes.length === 0) return readSizes(sizesFile);
 		return update(sizesFile, readSizes, (stored) => sizes.reduce((next, [key, size]) =>
-			next[key]?.limitUsd === size.limitUsd ? next : { ...next, [key]: size }, stored), COLLECT_LOCK_WAIT_MS);
+			next[key]?.limitUsd === size.limitUsd ? next : { ...next, [key]: size }, stored));
 	}
 
 	function openCodeGoModels(context: CollectContext): string[] {
@@ -369,6 +410,10 @@ export function createDollarsCollector(options: CollectorOptions) {
 			openCodeGo: { ...config.openCodeGo, models: openCodeGoModels(context) },
 		};
 		const lastSizes = rememberSizes(context.snapshots, inputs);
+		// A state file whose lock was busy is still being tried; its note depends on how that ends.
+		await Promise.all([...retries]);
+		const indexProblem = ledger.indexProblem();
+		if (indexProblem) notes.push(`Could not save ${LEDGER_INDEX} in the usage-dollars folder (${indexProblem}), so each Pi process reads the session files again and the first usage call is slow.`);
 		for (const name of problems) notes.push(PROBLEM_NOTES[name] ?? `Could not complete ${name}; a figure can be wrong.`);
 		return { inputs: Object.keys(lastSizes).length ? { ...inputs, lastSizes } : inputs, notes };
 	}

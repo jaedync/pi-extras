@@ -386,3 +386,21 @@ test("the note for a busy lock clears when the file already holds the reading", 
 	const { notes } = await first.collect(context({ snapshots: weekly(10, NOW - MIN), now: NOW }));
 	assert.ok(!notes.some((note) => /window-readings\.json/.test(note)), notes.join(" | "));
 });
+
+test("a lock that frees soon gets the write on a later try, and the thread never blocks meanwhile", async () => {
+	const dir = agentDirWithTurns([[NOW - HOUR, 1]]);
+	const collector = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: noFetch });
+	holdLocks(dir, "window-readings.json");
+	let ticks = 0;
+	const timer = setInterval(() => { ticks++; }, 5);
+	const started = Date.now();
+	collector.observe(weekly(10, NOW - MIN), NOW - MIN);
+	assert.ok(Date.now() - started < 500, "observe returns at once");
+	setTimeout(() => rmSync(join(dir, "usage-dollars", "window-readings.json.lock")), 60);
+	const { notes } = await collector.collect(context({ snapshots: weekly(10, NOW - MIN), now: NOW }));
+	clearInterval(timer);
+	assert.ok(ticks >= 3, `timers ran while the lock was busy (${ticks})`);
+	assert.ok(!notes.some((note) => /window-readings\.json/.test(note)), notes.join(" | "));
+	const saved = JSON.parse(readFileSync(join(dir, "usage-dollars", "window-readings.json"), "utf8"));
+	assert.ok(saved["anthropic|seven_day"], JSON.stringify(saved));
+});
