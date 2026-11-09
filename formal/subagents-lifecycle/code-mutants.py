@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply each guard change to the real code, one at a time, run the conformance test, and restore the file.
+"""Apply each guard change (one or more text pairs in one file) to the real code, one at a time, run the conformance test, and restore the file.
 
     python3 formal/subagents-lifecycle/code-mutants.py "$PWD" [name ...]
 
@@ -7,7 +7,8 @@ It prints CAUGHT or missed for each change, then `git diff --stat` of lib/ and e
 import subprocess, sys, json
 ROOT = sys.argv[1]
 M = [
- ("stop-keeps-launch", "lib/subagents/team.ts", "const launch = (this.launches.get(name) ?? 0) + 1;\n\t\tthis.launches.set(name, launch);\n\t\t// An interrupted", "const launch = (this.launches.get(name) ?? 0);\n\t\t// An interrupted"),
+ ("stop-keeps-launch", "lib/subagents/team.ts", "const launch = (this.launches.get(name) ?? 0) + 1;\n\t\tif (options.by", "const launch = this.launches.get(name) ?? 0;\n\t\tif (options.by",
+  [("\t\tthis.launches.set(name, launch);\n\t\t// An interrupted", "\t\t// An interrupted")]),
  ("stop-ignores-relaunch", "lib/subagents/team.ts", "if (this.launches.get(name) !== launch || this.records.get(name)?.state !== \"stopped\") {", "if (false) {"),
  ("work-ignores-gone", "lib/subagents/team.ts", "await handle.prompt(next);\n\t\t\tif (this.gone(name, launch)) return false;", "await handle.prompt(next);"),
  ("open-ignores-gone", "lib/subagents/team.ts", "\t\tif (this.gone(name, launch)) {\n\t\t\tawait handle.dispose();\n\t\t\treturn null;\n\t\t}\n", ""),
@@ -20,18 +21,29 @@ M = [
  ("late-skips-queue", "lib/subagents/team.ts", "const late = [...handle.takeQueued(), ...this.takeInbox(name)];", "const late = [...this.takeInbox(name)];"),
  ("stop-no-abort", "lib/subagents/team.ts", "await handle?.abort().catch(() => undefined);", "await undefined;"),
  ("settle-skips-finish", "lib/subagents/team.ts", "this.patch(name, { state: \"idle\", endedAt: this.now(), activity: null, report, unread: undefined });\n\t\tthis.finish(name);", "this.patch(name, { state: \"idle\", endedAt: this.now(), activity: null, report, unread: undefined });\n\t\tthis.pump();"),
- ("stop-no-ending-guard", "lib/subagents/team.ts", "if (!record || this.ending.has(name) || (!LIVE_STATES", "if (!record || (!LIVE_STATES"),
+ ("stop-refuses-ending", "lib/subagents/team.ts", "if (!record || (!LIVE_STATES", "if (!record || this.ending.has(name) || (!LIVE_STATES"),
+ ("old-stop-clears-ending", "lib/subagents/team.ts", "if (this.ending.get(name) === launch) this.ending.delete(name);", "this.ending.delete(name);"),
+ ("old-stop-clears-parent-mark", "lib/subagents/team.ts", "if (this.stoppedByParent.get(name) === launch) this.stoppedByParent.delete(name);", "this.stoppedByParent.delete(name);",
+  [("const silent = mark !== undefined && mark === this.launches.get(name);", "const silent = mark !== undefined;")]),
+ ("gate-no-reabort", "lib/subagents/child-prompt.ts", "if (disposition === \"started\" && run.aborted) session.abort().catch(ignore);", "void disposition;"),
+ ("gate-abort-skips-prompt", "lib/subagents/child-prompt.ts", "\t\t\tawait session.abort();\n\t\t\tawait run?.ended;", "\t\t\tawait session.abort();"),
+ ("dispose-no-wait", "lib/subagents/child.ts", "\t\tif (gate.busy()) await gate.abort().catch(() => undefined);\n", ""),
+ ("prompt-skips-steers", "lib/subagents/child-prompt.ts", "\t\t\twhile (steers.size > 0) await Promise.allSettled([...steers]);\n", ""),
  ("pump-starts-any", "lib/subagents/slots.ts", "if (record?.state !== \"queued\") { this.dropGoOn(name); continue; }", ""),
  ("stop-relaunch-ignores-state", "lib/subagents/team.ts", "if (this.launches.get(name) !== launch || this.records.get(name)?.state !== \"stopped\") {", "if (this.launches.get(name) !== launch) {"),
  ("open-no-dispose", "lib/subagents/team.ts", "if (this.gone(name, launch)) {\n\t\t\tawait handle.dispose();\n\t\t\treturn null;", "if (this.gone(name, launch)) {\n\t\t\treturn null;"),
 ]
 only = sys.argv[2:] 
 out = []
-for name, path, a, b in M:
+for name, path, a, b, *more in M:
     if only and name not in only: continue
     f = f"{ROOT}/{path}"; src = open(f).read()
-    if src.count(a) != 1: out.append((name, f"PATTERN x{src.count(a)}")); continue
-    open(f, "w").write(src.replace(a, b))
+    pairs = [(a, b), *(more[0] if more else [])]
+    bad = [x for x, _ in pairs if src.count(x) != 1]
+    if bad: out.append((name, f"PATTERN x{src.count(bad[0])}")); continue
+    changed = src
+    for x, y in pairs: changed = changed.replace(x, y)
+    open(f, "w").write(changed)
     try:
         r = subprocess.run(["node", "--test", "tests/subagents-lifecycle-conformance.test.mts"], cwd=ROOT, capture_output=True, text=True, timeout=600)
         txt = r.stdout + r.stderr

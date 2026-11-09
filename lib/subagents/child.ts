@@ -30,6 +30,7 @@ import { launchFiles, resourceFiles, stampCurrent, stampOf, withFiles } from "./
 import { WAITING_FOR_MODEL, type AgentRecord, type AgentWork, type ChildHandle, type ChildHooks, type Launcher, type Usage } from "./types.ts";
 import { editTarget, outsideWorktree, realTarget, sourcePlace, workspaceError } from "./worktree.ts";
 import { childContextFiles } from "./child-context.ts";
+import { promptGate, type PromptGate } from "./child-prompt.ts";
 
 type Sdk = typeof import("@earendil-works/pi-coding-agent");
 
@@ -651,9 +652,11 @@ function watchChild(session: AgentSession, hooks: ChildHooks, context: ChildCont
 	});
 }
 
-function childDisposer(session: AgentSession, unsubscribe: () => void, guard: ReturnType<typeof createChildRateLimitGuard>): () => Promise<void> {
+export function childDisposer(session: Pick<AgentSession, "extensionRunner" | "dispose">, unsubscribe: () => void, guard: { dispose(): void }, gate: PromptGate): () => Promise<void> {
 	let disposed: Promise<void> | null = null;
 	return () => disposed ??= (async () => {
+		// Pi's dispose takes away the listener that stops a run at its start; a prompt in flight would then run unseen.
+		if (gate.busy()) await gate.abort().catch(() => undefined);
 		// SDK disposal can skip or time out extension shutdown handlers.
 		guard.dispose();
 		unsubscribe();
@@ -689,7 +692,8 @@ const pendingCalls = (session: AgentSession): number => (session.agent as { stat
 function handleFor(session: AgentSession, hooks: ChildHooks, context: ChildContext, guard: ReturnType<typeof createChildRateLimitGuard>, record: AgentRecord): ChildHandle {
 	const streaming = watchStreaming(session);
 	const unwatch = watchChild(session, hooks, context, record);
-	const dispose = childDisposer(session, () => { streaming.stop(); unwatch(); }, guard);
+	const gate = promptGate(session);
+	const dispose = childDisposer(session, () => { streaming.stop(); unwatch(); }, guard, gate);
 	const held: string[] = [];
 	const turnEnd = endAtTurn(session, hooks, held);
 	return {
@@ -699,7 +703,7 @@ function handleFor(session: AgentSession, hooks: ChildHooks, context: ChildConte
 			// Main can be idle while a child streams; Idle GC must not pause the process under it.
 			const release = holdBusy();
 			try {
-				await session.prompt(text);
+				await gate.prompt(text);
 			} finally {
 				release();
 			}
@@ -711,9 +715,9 @@ function handleFor(session: AgentSession, hooks: ChildHooks, context: ChildConte
 		steer(text) {
 			// A run that ended at a turn for a swap reads nothing more here, nor does one that wraps up at its budget: its next run does.
 			if (turnEnd.ending() || hooks.wrapUp?.() !== undefined) held.push(text);
-			else void session.steer(text).catch(() => undefined);
+			else gate.steer(text);
 		},
-		abort: () => session.abort(),
+		abort: () => gate.abort(),
 		toolsRunning: () => pendingCalls(session) > 0,
 		lastText: () => session.getLastAssistantText(),
 		messages: () => session.messages,

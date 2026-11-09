@@ -9,18 +9,23 @@
  * abort, the reports handed up and the prompts in flight. A difference means
  * the model no longer describes the code, so its checks prove nothing about it.
  *
- * The child's Pi session is a fake that follows the model's Pi rules: an abort
- * in the pre-run window is lost, an abort in _prepareRun stops the prompt at
- * agent_start unless dispose came first, and dispose stops only an active
- * loop. The replay does not check those rules against Pi:
- * formal/subagents-lifecycle/probe-pi-abort.mts does that in a real
- * AgentSession. The quiet-spell timer of sessions.ts:140-143 is called by hand.
+ * The child's handle runs the real prompt gate (lib/subagents/child-prompt.ts)
+ * and the real disposer (child.ts childDisposer) over a fake Pi session that
+ * follows the model's Pi rules: an abort in the pre-run window is lost, an
+ * abort in _prepareRun stops the prompt at agent_start while the listener is
+ * there, Pi's dispose takes the listener away and stops only an active loop,
+ * and a steer reaches the queue only when its input handlers end. The replay
+ * does not check those rules against Pi: probe-pi-abort.mts and the repro
+ * scripts in formal/subagents-lifecycle do that in a real AgentSession. The
+ * quiet-spell timer of sessions.ts:140-143 is called by hand.
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { gunzipSync } from "node:zlib";
 import { Team } from "../lib/subagents/team.ts";
+import { childDisposer } from "../lib/subagents/child.ts";
+import { promptGate } from "../lib/subagents/child-prompt.ts";
 import { stillUnread } from "../lib/subagents/mailbox.ts";
 import type { AgentRecord, ChildHandle, ChildHooks, MainDelivery } from "../lib/subagents/types.ts";
 
@@ -30,6 +35,7 @@ const PRIMARY = "openai/gpt-primary";
 const FALLBACK = "anthropic/claude-fallback";
 // planFallback (fallback.ts) takes this as a provider failure that a fallback model can serve.
 const MODEL_ERROR = "503 service unavailable";
+const MAX_MSGS = 2;
 
 type Itf = { states: Array<Record<string, any>>; "#meta"?: Record<string, any> };
 
@@ -57,8 +63,20 @@ const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 const sorted = <T,>(items: T[]): T[] => [...items].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
 const user = (text: string) => ({ role: "user", content: [{ type: "text", text }] });
 
-interface FakePrompt { c: string; s: number; r: number; phase: string; abortReq: boolean; disposed: boolean; resolve(): void; reject(error: Error): void }
-interface FakeSession { c: string; l: number; disposed: boolean; queue: string[]; hooks: ChildHooks; aborts: Array<() => void> }
+/**
+ * A prompt in the fake Pi session. `abortSeen`: an abort came while it was in
+ * its pre or prep window (sticky, as the model's abortReq there); `piAbort`:
+ * Pi's _agentRunAbortRequested, which _startRun resets; `loopAborted`: an
+ * abort of its active loop; `disposed`: the handle's dispose began.
+ */
+interface FakePrompt {
+	c: string; s: number; r: number; phase: string; out: string; abortSeen: boolean; piAbort: boolean; loopAborted: boolean; disposed: boolean;
+	started?: (disposition: string) => void; resolve(): void;
+}
+interface FakeSession {
+	c: string; l: number; disposing: boolean; piDisposed: boolean; listener: boolean; queue: string[]; hooks: ChildHooks;
+	aborts: Array<() => void>; steers: Array<{ id: number; text: string; land(): void }>; failed: boolean;
+}
 
 /** The code side of one replay: a real Team, a fake launcher and fake Pi sessions. */
 function makeWorld() {
@@ -75,38 +93,71 @@ function makeWorld() {
 	let stopsMade = 0;
 	let team: Team;
 	const launchOf = (c: string): number => ((team as any).launches.get(c) ?? 0);
+	const mine = (session: FakeSession) => prompts.filter((p) => p.c === session.c && p.s === session.l);
+	// Pi's waitForIdle (agent-session.js:1984-1989): no run is active; a prompt in its pre window has none yet.
+	const piIdle = (session: FakeSession) => mine(session).every((p) => p.phase === "pre" || p.phase === "steers");
+	const wakeAborts = (session: FakeSession) => { if (piIdle(session)) for (const resolve of session.aborts.splice(0)) resolve(); };
 
-	const handleFor = (session: FakeSession): ChildHandle & { session: FakeSession } => ({
-		session,
-		// child.ts:697-709: a prompt that ends with an error reply throws.
-		prompt: (text) => new Promise<void>((resolve, reject) => {
-			if (!session.disposed) transcripts.get(session.c)!.push(user(text));
-			prompts.push({ c: session.c, s: session.l, r: launchOf(session.c), phase: "pre", abortReq: false, disposed: session.disposed, resolve, reject });
-		}),
-		// child.ts:710-714: session.steer puts it in Pi's queue.
-		steer: (text) => { session.queue.push(text); },
-		// AgentSession.abort (agent-session.js:1971-1989): no effect in the pre-run window; it resolves when no run is active.
-		abort: () => {
-			const mine = prompts.filter((p) => p.c === session.c && p.s === session.l);
-			for (const p of mine) if (p.phase !== "pre") p.abortReq = true;
-			if (mine.every((p) => p.phase === "pre")) return Promise.resolve();
+	/** The parts of Pi's AgentSession that the gate and the disposer use, by the model's Pi rules. */
+	const piSession = (session: FakeSession) => ({
+		prompt(text: string, options?: { preflightResult?: (disposition: string) => void }) {
+			if (!session.piDisposed) transcripts.get(session.c)!.push(user(text));
+			return new Promise<void>((resolve) => {
+				prompts.push({ c: session.c, s: session.l, r: launchOf(session.c), phase: "pre", out: "", abortSeen: false, piAbort: false, loopAborted: false,
+					disposed: session.disposing, resolve, ...(options?.preflightResult ? { started: options.preflightResult } : {}) });
+			});
+		},
+		// AgentSession.abort (agent-session.js:1971-1989): the flag only while a run exists; it resolves when no run is active.
+		abort() {
+			for (const p of mine(session)) {
+				if (p.phase === "pre" || p.phase === "prep") p.abortSeen = true;
+				if (p.phase === "prep") p.piAbort = true;
+				if (p.phase === "active") p.loopAborted = true;
+			}
+			if (piIdle(session)) return Promise.resolve();
 			return new Promise<void>((resolve) => session.aborts.push(resolve));
 		},
-		lastText: () => undefined,
-		messages: () => transcripts.get(session.c)!,
-		// child.ts:719-725: what is left in Pi's queue.
-		takeQueued: () => session.queue.splice(0),
-		// child.ts:654-672 and AgentSession.dispose (agent-session.js:1011-1030): agent.abort() stops only an active loop.
-		dispose: async () => {
-			session.disposed = true;
+		// agent-session.js:1752-1766: the message is queued once the input handlers end (the replay's steerLands).
+		steer(text: string) {
+			const id = MAX_MSGS + 1 - Number(/<m(\d+)>/.exec(text)?.[1] ?? 0);
+			return new Promise<void>((resolve) => session.steers.push({ id, text, land: () => { session.queue.push(text); resolve(); } }));
+		},
+		extensionRunner: undefined,
+		// AgentSession.dispose (:1011-1030): agent.abort() stops an active loop; the listener goes. The fake also drops the queue.
+		dispose() {
+			session.piDisposed = true;
+			session.listener = false;
 			session.queue.splice(0);
-			for (const p of prompts) {
-				if (p.c !== session.c || p.s !== session.l) continue;
-				p.disposed = true;
-				if (p.phase === "active") p.abortReq = true;
-			}
+			for (const p of mine(session)) if (p.phase === "active") p.loopAborted = true;
 		},
 	});
+
+	const handleFor = (session: FakeSession): ChildHandle & { session: FakeSession } => {
+		const pi = piSession(session);
+		const gate = promptGate(pi);
+		const disposer = childDisposer(pi as never, () => undefined, { dispose() {} }, gate);
+		return {
+			session,
+			// child.ts handleFor `prompt`: the gate, then a reply that ended with an error throws.
+			async prompt(text) {
+				const running = gate.prompt(text);
+				const p = prompts.at(-1)!;
+				try { await running; } finally { prompts.splice(prompts.indexOf(p), 1); }
+				if (session.failed) { session.failed = false; throw new Error(MODEL_ERROR); }
+			},
+			steer: (text) => gate.steer(text),
+			abort: () => gate.abort(),
+			lastText: () => undefined,
+			messages: () => transcripts.get(session.c)!,
+			// child.ts takeQueued: what is left in Pi's queue.
+			takeQueued: () => session.queue.splice(0),
+			dispose: () => {
+				if (!session.disposing) for (const p of mine(session)) p.disposed = true;
+				session.disposing = true;
+				return disposer();
+			},
+		};
+	};
 
 	team = new Team({
 		maxConcurrent: 1, maxDepth: 2, replyTimeoutMs: 60_000, idleReleaseMs: 1e9,
@@ -129,18 +180,24 @@ function makeWorld() {
 	}
 
 	const heldOf = (c: string) => (team as any).sessions.get(c) as (ChildHandle & { session: FakeSession }) | undefined;
+	/** A prompt as the model shows it. */
+	const shown = (p: FakePrompt) => ({
+		abortReq: p.phase === "active" ? p.loopAborted : p.phase === "steers" ? false : p.abortSeen,
+		c: p.c, disposed: p.disposed, out: p.out, phase: p.phase, r: p.r, s: p.s,
+	});
 	const promptOf = (pick: any) => {
-		const found = prompts.find((p) => p.c === pick.c && p.s === pick.s && p.r === pick.r && p.phase === pick.phase && p.abortReq === pick.abortReq && p.disposed === pick.disposed);
+		const found = prompts.find((p) => JSON.stringify(shown(p)) === JSON.stringify(shown({ ...pick, abortSeen: pick.abortReq, loopAborted: pick.abortReq })));
 		assert.ok(found, `the code has no prompt ${JSON.stringify(pick)}`);
 		return found;
 	};
-	// A prompt that ends: an abort that waits for this session resolves once no run is active there
+	const sessionOf = (p: FakePrompt) => sessions.find((one) => one.c === p.c && one.l === p.s)!;
+	// Pi's prompt() returns: the gate goes on, and an abort that waits resolves once no run is active
 	// (waitForIdle, resolved at the end of _emitAgentSettled, agent-session.js:683-707).
-	const removePrompt = (p: FakePrompt) => {
-		prompts.splice(prompts.indexOf(p), 1);
-		const session = sessions.find((one) => one.c === p.c && one.l === p.s)!;
-		if (prompts.some((other) => other.c === p.c && other.s === p.s && other.phase !== "pre")) return;
-		for (const resolve of session.aborts.splice(0)) resolve();
+	const promptReturns = (p: FakePrompt, outcome: string) => {
+		p.phase = "steers";
+		p.out = outcome;
+		wakeAborts(sessionOf(p));
+		p.resolve();
 	};
 	const say = (c: string, text: string) => transcripts.get(c)!.push({ role: "assistant", stopReason: "stop", content: [{ type: "text", text }] });
 	const ids = (texts: readonly string[] | undefined, c: string) => (sent.get(c) ?? []).filter((id) => (texts ?? []).some((text) => text.includes(`<${id}>`)));
@@ -152,7 +209,7 @@ function makeWorld() {
 			const at = pendingLaunches.findIndex((p) => p.c === c && p.l === l);
 			assert.ok(at >= 0, `no launch of ${c} ${l} in flight`);
 			const [launch] = pendingLaunches.splice(at, 1);
-			const session: FakeSession = { c, l, disposed: false, queue: [], hooks: launch!.hooks, aborts: [] };
+			const session: FakeSession = { c, l, disposing: false, piDisposed: false, listener: true, queue: [], hooks: launch!.hooks, aborts: [], steers: [], failed: false };
 			sessions.push(session);
 			launch!.resolve(handleFor(session));
 		},
@@ -163,19 +220,29 @@ function makeWorld() {
 			const [launch] = pendingLaunches.splice(at, 1);
 			launch!.reject(new Error(MODEL_ERROR));
 		},
-		piPrepare(next) { promptOf(picked(next, "p")).phase = "prep"; },
+		// _startRun resets Pi's abort flag (agent-session.js:1423-1425).
+		piPrepare(next) { const p = promptOf(picked(next, "p")); p.phase = "prep"; p.piAbort = false; },
 		piAgentStart(next) {
 			const p = promptOf(picked(next, "p"));
-			if (p.abortReq && !p.disposed) { removePrompt(p); p.resolve(); }
-			else { p.phase = "active"; p.abortReq = false; }
+			// preflightResult("started") (agent-session.js:1442): the gate may abort again.
+			p.started?.("started");
+			if (p.piAbort && sessionOf(p).listener) promptReturns(p, "aborted");
+			else { p.phase = "active"; p.loopAborted = false; }
 		},
 		piEnds(next) {
 			const p = promptOf(picked(next, "p"));
 			const outcome = picked(next, "out");
-			removePrompt(p);
-			if (outcome === "error") return p.reject(new Error(MODEL_ERROR));
-			if (!p.disposed && outcome === "ok") say(p.c, `report from ${p.c}`);
-			p.resolve();
+			const session = sessionOf(p);
+			if (outcome === "error") session.failed = true;
+			if (!session.piDisposed && outcome === "ok") say(p.c, `report from ${p.c}`);
+			promptReturns(p, outcome);
+		},
+		steerLands(next) {
+			const [c, s, id] = picked(next, "t");
+			const session = sessions.find((one) => one.c === c && one.l === s)!;
+			const at = session.steers.findIndex((one) => one.id === id);
+			assert.ok(at >= 0, `no steer ${id} in flight in ${c}'s session ${s}`);
+			session.steers.splice(at, 1)[0]!.land();
 		},
 		piReadsSteer(next) {
 			const c = picked(next, "c");
@@ -194,12 +261,11 @@ function makeWorld() {
 			const live = ["queued", "starting", "running", "asking", "waiting"].includes(before);
 			const held = heldOf(c)?.session.l ?? 0;
 			const entry = { c, l: launchOf(c) + 1, s: held, done: false };
-			const ending = (team as any).ending.has(c);
-			void team.stop(c).then((result) => {
+			void team.stop(c, picked(next, "byMain") ? { by: "main" } : {}).then((result) => {
 				entry.done = true;
 				if (result === undefined && live) refusedLive = true;
 			});
-			if (!ending && (live || before === "interrupted")) stops.push(entry);
+			if (live || before === "interrupted") stops.push(entry);
 		},
 		message(next) {
 			const c = picked(next, "c");
@@ -224,6 +290,7 @@ function makeWorld() {
 		const texts = (c: string) => [...userTexts(c)];
 		const occurrences = (c: string) => (sent.get(c) ?? []).reduce((n, id) => n + texts(c).filter((t) => t.includes(`<${id}>`)).length, 0);
 		const heldSession = (c: string) => heldOf(c)?.session;
+		const inFlight = (c: string) => sessions.filter((one) => one.c === c).flatMap((one) => one.steers.map((steer) => steer.text));
 		const lostOf = (c: string) => (sent.get(c) ?? []).filter((id) => {
 			const tag = `<${id}>`;
 			const places = [...texts(c), ...(record(c).inbox ?? []), resumeOf(c)?.message ?? "", ...(record(c).unread ?? []), ...(heldSession(c)?.queue ?? [])];
@@ -232,7 +299,8 @@ function makeWorld() {
 		return {
 			state: per((c) => record(c).state),
 			launches: per(launchOf),
-			ending: sorted([...(team as any).ending] as string[]),
+			ending: per((c) => (team as any).ending.get(c) ?? 0),
+			byParent: per((c) => (team as any).stoppedByParent.get(c) ?? 0),
 			line: [...(team as any).slots.line] as string[],
 			goingOn: sorted([...(team as any).slots.goingOn.keys()] as string[]),
 			opening: sorted(pendingLaunches.map((p) => [p.c, p.l])),
@@ -241,9 +309,11 @@ function makeWorld() {
 			resume: per((c) => (resumeOf(c) ? ids(resumeOf(c)!.message ? [resumeOf(c)!.message!] : [], c).length : -1)),
 			continuing: sorted([...(team as any).continuing.keys()] as string[]),
 			fallbacksLeft: per((c) => 1 - (record(c).fallbacks?.length ?? 0)),
-			prompts: sorted(prompts.map(({ c, s, r, phase, abortReq, disposed }) => ({ abortReq, c, disposed, phase, r, s }))),
+			prompts: sorted(prompts.map(shown)),
 			stops: sorted(stops.filter((one) => !one.done).map((one) => [one.c, one.l, one.s])),
-			sq: per((c) => ids(unread(c), c).length),
+			// Unread steering that is in Pi's queue; a steer still in its input handlers is in flight.
+			sq: per((c) => ids(unread(c).filter((text) => !inFlight(c).includes(text)), c).length),
+			steersInFlight: per((c) => inFlight(c).length),
 			sqCopy: per((c) => (heldSession(c)?.queue ?? []).filter((text) => !unread(c).includes(text)).length),
 			sent: per((c) => sent.get(c)!.length),
 			readPlusDup: per(occurrences),
@@ -252,7 +322,7 @@ function makeWorld() {
 			waiters: sorted([...waiting]),
 			refusedLive,
 			// team.ts:669-672 and sessions.ts:161-166: a session that is not held was disposed.
-			stray: sessions.filter((one) => !one.disposed && heldSession(one.c) !== one).length,
+			stray: sessions.filter((one) => !one.disposing && heldSession(one.c) !== one).length,
 			msgsLeft: 2 - msgs,
 			stopsLeft: 2 - stopsMade,
 		};
@@ -266,9 +336,9 @@ function modelState(state: Record<string, any>) {
 	const w = state.w;
 	const per = (f: (c: string) => any) => Object.fromEntries(CHILDREN.map((c) => [c, f(c)]));
 	return {
-		state: w.state, launches: w.launches, ending: sorted(w.ending), line: w.line, goingOn: sorted(w.goingOn),
+		state: w.state, launches: w.launches, ending: w.ending, byParent: w.byParent, line: w.line, goingOn: sorted(w.goingOn),
 		opening: sorted(w.opening), held: w.held, inbox: w.inbox, resume: w.resume, continuing: sorted(w.continuing),
-		fallbacksLeft: w.fallbacksLeft, prompts: sorted(w.prompts), stops: sorted(w.stops), sq: w.sq, sqCopy: w.sqCopy,
+		fallbacksLeft: w.fallbacksLeft, prompts: sorted(w.prompts.map((p: any) => ({ abortReq: p.abortReq, c: p.c, disposed: p.disposed, out: p.out, phase: p.phase, r: p.r, s: p.s }))), stops: sorted(w.stops), sq: w.sq, steersInFlight: per((c) => w.sp.filter((t: any) => t[0] === c).length), sqCopy: w.sqCopy,
 		sent: w.sent, readPlusDup: per((c) => w.read[c] + w.dup[c]), lost: w.lost,
 		reportsTotal: w.reportsTotal, waiters: sorted(w.waiters), refusedLive: w.refusedLive, stray: 0, msgsLeft: w.msgsLeft, stopsLeft: w.stopsLeft,
 	};
@@ -300,21 +370,23 @@ test("the team's lifecycle code follows every step of the model traces", async (
 	assert.ok(steps > 2000, `expected over 2000 replayed steps, replayed ${steps}`);
 });
 
-// Findings F1 and F3 in formal/subagents-lifecycle/README.md. These tests show
-// that the code takes each step of the model's path; they are not wishes.
-// When the code is fixed, the model and these tests change with it.
-test("finding F1: the code follows the model's path to a stopped child whose prompt still runs", async () => {
-	const traces = loadTraces();
-	const index = traces.findIndex((t) => t["#meta"]?.witness === "stopMeansStopped");
-	assert.ok(index >= 0, "the traces hold no stopMeansStopped witness; run fv.mjs traces");
-	const { final } = await replay(traces[index]!, index);
-	assert.ok(final.prompts.some((p: any) => p.phase === "pre" && p.disposed), "the replay did not end with a disposed prompt that still runs");
-});
-
-test("finding F3: the code follows the model's path to a refused stop of a working child", async () => {
-	const traces = loadTraces();
-	const index = traces.findIndex((t) => t["#meta"]?.witness === "stopHonored");
-	assert.ok(index >= 0, "the traces hold no stopHonored witness; run fv.mjs traces");
-	const { final } = await replay(traces[index]!, index);
-	assert.equal(final.refusedLive, true);
-});
+// The paths of findings F1 to F5 (formal/subagents-lifecycle/README.md), where
+// the code was wrong before the fix: each one has a witness trace, so a new
+// trace set can't drop the path without this test failing.
+const FINDING_PATHS: Array<[string, string]> = [
+	["F1: a stop waits for a prompt in its pre window", "witnessNoStopInPre"],
+	["F2: a dispose of a prompt before its agent loop", "witnessNoDisposedBeforeRun"],
+	["F3 and F4: two stops of one child wait at the same time", "witnessNoTwoStops"],
+	["F4: the newer of two stops is by the parent", "witnessNoParentStopOverStop"],
+	["F4: the older stop goes on while the newer one waits", "witnessNoStaleStopOverStop"],
+	["F4: the older stop goes on while a newer stop by the parent waits", "witnessNoStaleStopOverParentStop"],
+	["F5: the prompt waits for a steer in flight", "witnessNoSteerWait"],
+];
+for (const [path, witness] of FINDING_PATHS) {
+	test(`the code follows the model on the path of finding ${path}`, async () => {
+		const traces = loadTraces();
+		const index = traces.findIndex((t) => t["#meta"]?.witness === witness);
+		assert.ok(index >= 0, `the traces hold no ${witness} witness; run fv.mjs traces`);
+		assert.ok((await replay(traces[index]!, index)).steps > 0);
+	});
+}

@@ -95,16 +95,20 @@ export class Team implements HostTeam {
 	private readonly waiters = new Map<string, Array<(record: AgentRecord) => void>>();
 	private readonly listeners = new Set<Listener>();
 	private readonly slots: Slots;
-	/** Stops between marking the record stopped and handing its report up. */
-	private readonly ending = new Set<string>();
+	/**
+	 * Stops between marking the record stopped and handing its report up, with
+	 * the launch number each stop gave its child: a stop whose abort ends after
+	 * a relaunch and a newer stop leaves the newer stop's mark alone.
+	 */
+	private readonly ending = new Map<string, number>();
 	private readonly answers = new MainAnswers();
 	private closed = false;
 	private closing: Promise<void> | undefined;
 	private readonly resumePrompts = new ResumePrompts();
 	/** Each child's latest launch: a launch or run from before a stop and a relaunch is stale, and ends quietly. */
 	private readonly launches = new Map<string, number>();
-	/** Stopped by their own parent, which already knows; no report goes up. */
-	private readonly stoppedByParent = new Set<string>();
+	/** Stopped by their own parent, which already knows; no report goes up. With the launch number of that stop, as `ending`. */
+	private readonly stoppedByParent = new Map<string, number>();
 	/** Runs going on in a new session, on a fallback model or after a swap, with what they had used of their budget: the same run goes on. */
 	private readonly continuing = new Map<string, BudgetUse | undefined>();
 	/** Runs that waited on their subagents or an answer and relaunch to go on, with what they had used: a launch that fails is a failed resume. */
@@ -397,18 +401,19 @@ export class Team implements HostTeam {
 	 */
 	async stop(name: string, options: { by?: string; reason?: string } = {}): Promise<AgentRecord | undefined> {
 		const record = this.records.get(name);
-		if (!record || this.ending.has(name) || (!LIVE_STATES.has(record.state) && record.state !== "interrupted")) return undefined;
-		if (options.by !== undefined && options.by === record.parent) this.stoppedByParent.add(name);
-		// Ending before its subagents stop: it can't start another meanwhile, and a second stop finds it ending.
-		this.ending.add(name);
+		// A child that a stop still aborts is stopped, so a second stop ends here; one that a message relaunched meanwhile works and is stopped again.
+		if (!record || (!LIVE_STATES.has(record.state) && record.state !== "interrupted")) return undefined;
+		// A new number: the run and launch from before the stop are stale from now on, even when a message queues a relaunch.
+		const launch = (this.launches.get(name) ?? 0) + 1;
+		if (options.by !== undefined && options.by === record.parent) this.stoppedByParent.set(name, launch);
+		// Ending before its subagents stop: it can't start another meanwhile.
+		this.ending.set(name, launch);
 		this.wrapUps.end(name);
 		this.slots.remove(name);
 		this.parkResume(name);
 		for (const question of this.questions.of(name)) question.reject(new Error("stopped"));
 		this.checks.abort(name);
 		const handle = this.sessions.get(name);
-		// A new number: the run and launch from before the stop are stale from now on, even when a message queues a relaunch.
-		const launch = (this.launches.get(name) ?? 0) + 1;
 		this.launches.set(name, launch);
 		// An interrupted child has no run in this process; its last report stays.
 		const report = () => this.sessions.runText(name) ?? (record.state === "interrupted" ? record.report : undefined);
@@ -417,8 +422,9 @@ export class Team implements HostTeam {
 		await handle?.abort().catch(() => undefined);
 		// A message relaunched it during the abort (queued, or launched already): the new run is what its parent hears of.
 		if (this.launches.get(name) !== launch || this.records.get(name)?.state !== "stopped") {
-			this.ending.delete(name);
-			this.stoppedByParent.delete(name);
+			// A newer stop of the relaunched child owns the marks now.
+			if (this.ending.get(name) === launch) this.ending.delete(name);
+			if (this.stoppedByParent.get(name) === launch) this.stoppedByParent.delete(name);
 			this.pump();
 			return this.records.get(name);
 		}
@@ -923,7 +929,11 @@ export class Team implements HostTeam {
 		this.put(record.blocking ? { ...record, blocking: false } : record);
 		this.answers.forget(name);
 		this.settleWaiters(name, record);
-		handUp(this.handUpHost, record, this.stoppedByParent.delete(name));
+		// Silent only for the stop of this launch: a run that a message started after an earlier stop by the parent reports.
+		const mark = this.stoppedByParent.get(name);
+		const silent = mark !== undefined && mark === this.launches.get(name);
+		this.stoppedByParent.delete(name);
+		handUp(this.handUpHost, record, silent);
 		this.sessions.ended(name, record.state);
 		this.pump();
 	}

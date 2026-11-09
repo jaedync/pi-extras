@@ -26,13 +26,16 @@ await sleep(200);
 if (message) await team.send("main", "kid", "Go on with the task.");
 await until("the new run calls bash", () => !message || launches[1]?.modelCalls === 1).catch(() => undefined);
 const stateBeforeSecondStop = team.get("kid")!.state;
-// 4. Main stops it again.
-const second = await team.stop("kid");
-const refused = second === undefined;
+// 4. Main stops it again. A stop that goes on waits for the abort, as the first did; a refused one returns undefined at once.
+let secondResult = "waits";
+const second = team.stop("kid").then((record) => { secondResult = record === undefined ? "refused" : "stopped"; });
+await sleep(300);
+const refused = secondResult === "refused";
 // 5. Everything ends.
 open("agent_end");
 open("bash");
 await first;
+await second;
 await until("the team settles", () => !["queued", "starting", "running"].includes(team.get("kid")!.state), 15_000).catch(() => undefined);
 await sleep(500);
 const result = {

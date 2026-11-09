@@ -10,7 +10,8 @@
     "mailKept",
     "stopMeansStopped",
     "oneSession",
-    "stopHonored"
+    "stopHonored",
+    "parentStopSilent"
   ],
   "syncCommit": "343e195",
   "covers": [
@@ -41,65 +42,21 @@
     {
       "path": "lib/subagents/child.ts",
       "what": "handleFor: prompt, steer, abort, takeQueued, dispose (childDisposer)"
+    },
+    {
+      "path": "lib/subagents/child-prompt.ts",
+      "what": "promptGate: prompt, abort, steer (the stop that Pi does not give)"
     }
   ],
   "checks": [
     {
       "name": "faithful",
-      "why": "Pi 1.4.0 as it is. The shortest path is finding F1: a stop while the child's prompt is in its pre-run window.",
-      "expect": {
-        "violates": "stopMeansStopped"
-      }
+      "why": "Pi 1.4.0 as it is (an abort in the pre window is lost, dispose does not stop a preparing run, a steer waits for the input handlers), with the code's fixes of F1 to F5. Every property holds.",
+      "expect": "pass"
     },
     {
-      "name": "faithful-other-properties",
-      "why": "Pi as it is, with a steer that is queued at once (synchronous input handlers): the properties that no finding breaks hold. F5 breaks mailKept when steer awaits input handlers.",
-      "invariants": [
-        "oneReport",
-        "waitersSettle",
-        "noStuck",
-        "slotsBound",
-        "mailKept",
-        "oneSession"
-      ],
-      "expect": "pass",
-      "replace": [
-        {
-          "from": "pure val STEER_WINDOW = true",
-          "to": "pure val STEER_WINDOW = false"
-        }
-      ]
-    },
-    {
-      "name": "faithful-mail",
-      "why": "Pi as it is: a steer that waits for the input handlers is lost (F5).",
-      "invariants": [
-        "mailKept"
-      ],
-      "expect": {
-        "violates": "mailKept"
-      }
-    },
-    {
-      "name": "f2-dispose-in-prep",
-      "why": "No pre-run window (a child with synchronous input handlers and a configured login): a stop during _prepareRun and a message that relaunches the child during the abort dispose the session before agent_start (F2).",
-      "replace": [
-        {
-          "from": "pure val PRE_WINDOW = true",
-          "to": "pure val PRE_WINDOW = false"
-        },
-        {
-          "from": "pure val STEER_WINDOW = true",
-          "to": "pure val STEER_WINDOW = false"
-        }
-      ],
-      "expect": {
-        "violates": "stopMeansStopped"
-      }
-    },
-    {
-      "name": "f3-second-stop-refused",
-      "why": "Pi fixed (no pre-run window, dispose stops a preparing run): a stop of a child that a message relaunched during an earlier stop's abort is refused (F3).",
+      "name": "pi-without-windows",
+      "why": "A Pi with none of the three windows (no await before _startRun, a steer queued at once, a dispose that stops a preparing run): the code's fixes do not depend on Pi's windows. Every property holds.",
       "replace": [
         {
           "from": "pure val PRE_WINDOW = true",
@@ -108,56 +65,6 @@
         {
           "from": "pure val DISPOSE_STOPS_PREP = false",
           "to": "pure val DISPOSE_STOPS_PREP = true"
-        },
-        {
-          "from": "pure val STEER_WINDOW = true",
-          "to": "pure val STEER_WINDOW = false"
-        }
-      ],
-      "expect": {
-        "violates": "stopHonored"
-      }
-    },
-    {
-      "name": "f4-old-stop-clears-ending",
-      "why": "Pi fixed: a stop whose abort waits long ends after a relaunched run and a newer stop began, and its `ending.delete` clears the newer stop's mark (F4).",
-      "replace": [
-        {
-          "from": "pure val PRE_WINDOW = true",
-          "to": "pure val PRE_WINDOW = false"
-        },
-        {
-          "from": "pure val DISPOSE_STOPS_PREP = false",
-          "to": "pure val DISPOSE_STOPS_PREP = true"
-        },
-        {
-          "from": "pure val STEER_WINDOW = true",
-          "to": "pure val STEER_WINDOW = false"
-        }
-      ],
-      "expect": {
-        "violates": "reportOnEnd"
-      }
-    },
-    {
-      "name": "assume-fixes",
-      "why": "Assume the three fixes: Pi stops a prompt in its pre-run window and a disposed preparing prompt (F1, F2), and a stop of a relaunched child is not refused, with the newest stop owning `ending` (F3). Every property holds. It also assumes a steer that is queued at once (the F5 fix).",
-      "replace": [
-        {
-          "from": "pure val PRE_WINDOW = true",
-          "to": "pure val PRE_WINDOW = false"
-        },
-        {
-          "from": "pure val DISPOSE_STOPS_PREP = false",
-          "to": "pure val DISPOSE_STOPS_PREP = true"
-        },
-        {
-          "from": "if (x0.ending.contains(c) or not(isLive(x0, c) or st == \"interrupted\"))",
-          "to": "if ((x0.ending.contains(c) and st == \"stopped\") or not(isLive(x0, c) or st == \"interrupted\"))"
-        },
-        {
-          "from": "if (x.launches.get(c) != l or x.state.get(c) != \"stopped\") pump({ ...x, ending: x.ending.exclude(Set(c)) })",
-          "to": "if (x.launches.get(c) != l or x.state.get(c) != \"stopped\") pump(if (x.stops.exists(t => t._1 == c)) x else { ...x, ending: x.ending.exclude(Set(c)) })"
         },
         {
           "from": "pure val STEER_WINDOW = true",
@@ -167,13 +74,99 @@
       "expect": "pass"
     },
     {
-      "name": "f5-steer-window",
-      "why": "Pi fixed for F1 and F2, and the F3 and F4 fixes: a message steered into a running child waits for the input handlers, the run settles first, settle clears `unread`, and the steer lands in an idle session's queue that the quiet-spell release drops (F5, found by the step-9 review).",
-      "base": "assume-fixes",
+      "name": "mutant-gate-no-reabort",
+      "base": "faithful",
+      "mirrors": "lib/subagents/child-prompt.ts `prompt` without the abort at preflightResult \"started\": an abort in the pre window is lost, as at HEAD (finding F1)",
       "replace": [
         {
-          "from": "pure val STEER_WINDOW = false",
-          "to": "pure val STEER_WINDOW = true"
+          "from": "pure val GATE_REABORTS = true",
+          "to": "pure val GATE_REABORTS = false"
+        }
+      ],
+      "expect": {
+        "violates": "stopMeansStopped"
+      }
+    },
+    {
+      "name": "mutant-dispose-no-wait",
+      "base": "faithful",
+      "mirrors": "lib/subagents/child.ts childDisposer without `await gate.abort()` before session.dispose(), as at HEAD (finding F2)",
+      "replace": [
+        {
+          "from": "pure val DISPOSE_WAITS = true",
+          "to": "pure val DISPOSE_WAITS = false"
+        }
+      ],
+      "expect": {
+        "violates": "stopMeansStopped"
+      }
+    },
+    {
+      "name": "survivor-abort-skips-pre",
+      "base": "faithful",
+      "why": "Mirrors lib/subagents/child-prompt.ts `abort` that does not wait for a prompt in its pre window. The gate still stops that prompt at its start, and a dispose waits for it, so no property breaks. The wait makes a stop return only after the prompt ended, as an abort of a running loop does.",
+      "replace": [
+        {
+          "from": "pure val GATE_ABORT_WAITS = true",
+          "to": "pure val GATE_ABORT_WAITS = false"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "mutant-stop-refuses-ending",
+      "base": "faithful",
+      "mirrors": "lib/subagents/team.ts:405 as it was at HEAD (`this.ending.has(name)` refuses a stop) (finding F3)",
+      "replace": [
+        {
+          "from": "if (not(isLive(x0, c) or st == \"interrupted\"))",
+          "to": "if (x0.ending.get(c) != 0 or not(isLive(x0, c) or st == \"interrupted\"))"
+        }
+      ],
+      "expect": {
+        "violates": "stopHonored"
+      }
+    },
+    {
+      "name": "mutant-old-stop-clears-ending",
+      "base": "faithful",
+      "mirrors": "lib/subagents/team.ts stop's relaunch branch with `this.ending.delete(name)` for any stop, as at HEAD (finding F4)",
+      "replace": [
+        {
+          "from": "ending: if (x.ending.get(c) == l) x.ending.set(c, 0) else x.ending,",
+          "to": "ending: x.ending.set(c, 0),"
+        }
+      ],
+      "expect": {
+        "violates": "reportOnEnd"
+      }
+    },
+    {
+      "name": "mutant-old-stop-clears-parent-mark",
+      "base": "faithful",
+      "mirrors": "lib/subagents/team.ts `stoppedByParent` as a set, as at HEAD: the relaunch branch deletes it for any stop, and finish takes any mark as silent (finding F4, repro-f4-byparent)",
+      "replace": [
+        {
+          "from": "byParent: if (x.byParent.get(c) == l) x.byParent.set(c, 0) else x.byParent })",
+          "to": "byParent: x.byParent.set(c, 0) })"
+        },
+        {
+          "from": "val silent = x.byParent.get(c) != 0 and x.byParent.get(c) == x.launches.get(c)",
+          "to": "val silent = x.byParent.get(c) != 0"
+        }
+      ],
+      "expect": {
+        "violates": "parentStopSilent"
+      }
+    },
+    {
+      "name": "mutant-prompt-skips-steers",
+      "base": "faithful",
+      "mirrors": "lib/subagents/child-prompt.ts `prompt` without the wait for steers in flight, as at HEAD (finding F5)",
+      "replace": [
+        {
+          "from": "pure val PROMPT_WAITS_STEERS = true",
+          "to": "pure val PROMPT_WAITS_STEERS = false"
         }
       ],
       "expect": {
@@ -182,8 +175,8 @@
     },
     {
       "name": "mutant-stop-keeps-launch",
-      "base": "assume-fixes",
-      "mirrors": "lib/subagents/team.ts:411-412 without the new launch number: `const launch = this.launches.get(name) ?? 0` and no `launches.set`",
+      "base": "faithful",
+      "mirrors": "lib/subagents/team.ts:407 and :417 without the new launch number: `const launch = this.launches.get(name) ?? 0` and no `launches.set`",
       "replace": [
         {
           "from": "val l = x0.launches.get(c) + 1",
@@ -200,12 +193,12 @@
     },
     {
       "name": "mutant-stop-ignores-relaunch",
-      "base": "assume-fixes",
-      "mirrors": "lib/subagents/team.ts:419 without the check: the stop always finishes after the abort",
+      "base": "faithful",
+      "mirrors": "lib/subagents/team.ts:424 without the check: the stop always finishes after the abort",
       "replace": [
         {
-          "from": "if (x.launches.get(c) != l or x.state.get(c) != \"stopped\") pump(if (x.stops.exists(t => t._1 == c)) x else { ...x, ending: x.ending.exclude(Set(c)) })",
-          "to": "if (false) x"
+          "from": "if (x.launches.get(c) != l or x.state.get(c) != \"stopped\") pump(",
+          "to": "if (false) pump("
         }
       ],
       "expect": {
@@ -214,8 +207,8 @@
     },
     {
       "name": "mutant-work-ignores-gone",
-      "base": "assume-fixes",
-      "mirrors": "lib/subagents/team.ts:713 without `if (this.gone(name, launch)) return false`",
+      "base": "faithful",
+      "mirrors": "lib/subagents/team.ts:719 without `if (this.gone(name, launch)) return false`",
       "replace": [
         {
           "from": "    if (gone(x, p.c, p.r)) x\n",
@@ -228,11 +221,11 @@
     },
     {
       "name": "mutant-open-ignores-gone",
-      "base": "assume-fixes",
-      "mirrors": "lib/subagents/team.ts:669-672 without the gone check: a stale launch holds its session",
+      "base": "faithful",
+      "mirrors": "lib/subagents/team.ts:675-678 without the gone check: a stale launch holds its session",
       "replace": [
         {
-          "from": "    // open (team.ts:669-672): a stale launch disposes its session and returns null.\n    if (gone(x, c, l)) w' = x",
+          "from": "    // open (team.ts:675-678): a stale launch disposes its session and returns null.\n    if (gone(x, c, l)) w' = x",
           "to": "    if (false) w' = x"
         }
       ],
@@ -242,8 +235,8 @@
     },
     {
       "name": "mutant-stop-keeps-resume",
-      "base": "assume-fixes",
-      "mirrors": "lib/subagents/team.ts:406 without `this.parkResume(name)`",
+      "base": "faithful",
+      "mirrors": "lib/subagents/team.ts:413 without `this.parkResume(name)`",
       "replace": [
         {
           "from": "val x2 = parkResume({ ...x1, ending:",
@@ -260,8 +253,8 @@
     },
     {
       "name": "mutant-stop-drops-unread",
-      "base": "assume-fixes",
-      "mirrors": "lib/subagents/team.ts:415 without `...this.unreadLeft(name)`",
+      "base": "faithful",
+      "mirrors": "lib/subagents/team.ts:420 without `...this.unreadLeft(name)`",
       "replace": [
         {
           "from": "val x3 = unreadLeft({ ...x2, launches: x2.launches.set(c, l) }, c)",
@@ -274,20 +267,20 @@
     },
     {
       "name": "survivor-pump-starts-any",
-      "base": "assume-fixes",
+      "base": "faithful",
+      "why": "Mirrors lib/subagents/slots.ts:89 without the `state !== \"queued\"` drop. No path in the model leaves a child in line in another state: a stop takes it out of line (team.ts:412), and every other writer that leaves queued (start, go) takes it out first. The guard is for asking and waiting children, which the model leaves out.",
       "replace": [
         {
           "from": "if (y.state.get(c) != \"queued\") { ...y, goingOn: y.goingOn.exclude(Set(c)) }",
           "to": "if (false) y"
         }
       ],
-      "expect": "pass",
-      "why": "Mirrors lib/subagents/slots.ts:89 without the `state !== \"queued\"` drop. No path in the model leaves a child in line in another state: a stop takes it out of line (team.ts:405), and every other writer that leaves queued (start, go) takes it out first. The guard is for asking and waiting children, which the model leaves out."
+      "expect": "pass"
     },
     {
       "name": "mutant-resume-ignores-slots",
-      "base": "assume-fixes",
-      "mirrors": "lib/subagents/team.ts:521 runWhenFree without `this.slots.free()`: a message to an idle child runs it at once",
+      "base": "faithful",
+      "mirrors": "lib/subagents/team.ts:527 runWhenFree without `this.slots.free()`: a message to an idle child runs it at once",
       "replace": [
         {
           "from": "if (free(z)) w' = runPrompt(",
@@ -300,12 +293,12 @@
     },
     {
       "name": "mutant-finish-keeps-waiters",
-      "base": "assume-fixes",
-      "mirrors": "lib/subagents/team.ts:925 without `this.settleWaiters(name, record)`",
+      "base": "faithful",
+      "mirrors": "lib/subagents/team.ts:931 without `this.settleWaiters(name, record)`",
       "replace": [
         {
-          "from": "      waiters: x.waiters.exclude(Set(c)),\n    }\n    val z",
-          "to": "    }\n    val z"
+          "from": "      waiters: x.waiters.exclude(Set(c)),\n      wrongSilence:",
+          "to": "      wrongSilence:"
         }
       ],
       "expect": {
@@ -313,20 +306,8 @@
       }
     },
     {
-      "name": "survivor-stop-twice",
-      "base": "assume-fixes",
-      "replace": [
-        {
-          "from": "if ((x0.ending.contains(c) and st == \"stopped\") or not(isLive(x0, c) or st == \"interrupted\"))",
-          "to": "if (not(isLive(x0, c) or st == \"interrupted\"))"
-        }
-      ],
-      "expect": "pass",
-      "why": "Mirrors lib/subagents/team.ts:400 without `this.ending.has(name)`, on the fixed model. A child in `ending` is stopped, and the LIVE check refuses a stopped child already, so the guard changes nothing while the state is stopped. At HEAD its only effect is finding F3."
-    },
-    {
       "name": "mutant-release-busy",
-      "base": "assume-fixes",
+      "base": "faithful",
       "mirrors": "lib/subagents/sessions.ts:142 without `this.options.idle(name)`: the quiet-spell timer releases a child that a message woke",
       "replace": [
         {
@@ -340,8 +321,8 @@
     },
     {
       "name": "mutant-resume-failed-drops-message",
-      "base": "assume-fixes",
-      "mirrors": "lib/subagents/team.ts:625 without `this.parkResume(name)` in resumeFailed",
+      "base": "faithful",
+      "mirrors": "lib/subagents/team.ts:631 without `this.parkResume(name)` in resumeFailed",
       "replace": [
         {
           "from": "    val y = parkResume(x, c)\n    pump({",
@@ -354,8 +335,8 @@
     },
     {
       "name": "mutant-fallback-keeps-session",
-      "base": "assume-fixes",
-      "mirrors": "lib/subagents/team.ts:826 without `this.sessions.release(name)` in failOrFallBack",
+      "base": "faithful",
+      "mirrors": "lib/subagents/team.ts:832 without `this.sessions.release(name)` in failOrFallBack",
       "replace": [
         {
           "from": "      val z = release({",
@@ -372,8 +353,8 @@
     },
     {
       "name": "mutant-late-skips-queue",
-      "base": "assume-fixes",
-      "mirrors": "lib/subagents/team.ts:794 without `handle.takeQueued()`: steering that came too late stays in the Pi queue",
+      "base": "faithful",
+      "mirrors": "lib/subagents/team.ts:800 without `handle.takeQueued()`: steering that came too late stays in the Pi queue",
       "replace": [
         {
           "from": "val late = x.sq.get(c) + x.sqCopy.get(c) + x.oq.get(c) + x.inbox.get(c)",
@@ -390,8 +371,8 @@
     },
     {
       "name": "mutant-stop-no-abort",
-      "base": "assume-fixes",
-      "mirrors": "lib/subagents/team.ts:417 without `await handle?.abort()`",
+      "base": "faithful",
+      "mirrors": "lib/subagents/team.ts:422 without `await handle?.abort()`",
       "replace": [
         {
           "from": "val x5 = { ...x4, prompts: x4.prompts.map(p => if (p.c == c and p.s == s) abortOne(p) else p) }",
@@ -404,8 +385,8 @@
     },
     {
       "name": "mutant-settle-skips-finish",
-      "base": "assume-fixes",
-      "mirrors": "lib/subagents/team.ts:870 without `this.finish(name)`: the run ends idle and hands no report up",
+      "base": "faithful",
+      "mirrors": "lib/subagents/team.ts:876 without `this.finish(name)`: the run ends idle and hands no report up",
       "replace": [
         {
           "from": "    finish({ ...x, state: x.state.set(c, \"idle\"), sp:",
@@ -419,24 +400,10 @@
       "expect": {
         "violates": "reportOnEnd"
       }
-    },
-    {
-      "name": "mutant-stop-refuses-ending",
-      "base": "assume-fixes",
-      "mirrors": "lib/subagents/team.ts:400 as it is at HEAD (`this.ending.has(name)` refuses), on the model with the Pi fixes",
-      "replace": [
-        {
-          "from": "if ((x0.ending.contains(c) and st == \"stopped\") or not(isLive(x0, c) or st == \"interrupted\"))",
-          "to": "if (x0.ending.contains(c) or not(isLive(x0, c) or st == \"interrupted\"))"
-        }
-      ],
-      "expect": {
-        "violates": "stopHonored"
-      }
     }
   ],
   "traces": {
-    "check": "faithful-other-properties",
+    "check": "faithful",
     "out": "traces.itf.jsonl.gz",
     "n": 200,
     "steps": 40,
@@ -450,9 +417,14 @@
       "witnessNoCopy",
       "witnessNoTwoPrompts",
       "witnessNoStopWait",
-      "stopMeansStopped",
-      "stopHonored",
-      "witnessNoQueuedRelaunchInStop"
+      "witnessNoQueuedRelaunchInStop",
+      "witnessNoStopInPre",
+      "witnessNoDisposedBeforeRun",
+      "witnessNoTwoStops",
+      "witnessNoParentStopOverStop",
+      "witnessNoSteerWait",
+      "witnessNoStaleStopOverStop",
+      "witnessNoStaleStopOverParentStop"
     ]
   }
 }

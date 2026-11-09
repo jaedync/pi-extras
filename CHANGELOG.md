@@ -21,6 +21,26 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   other new site fails the run. The development dependency `@ast-grep/cli`
   0.51.1 supplies the binary.
 
+### Fixed
+
+- Subagents: a stop now stops a child whose prompt still waits before its
+  run starts (an async `input` handler, an extension command, a login
+  check). Before, Pi lost that abort, and the stopped child called the model
+  on a disposed session (finding F1 of `formal/subagents-lifecycle`). The
+  child's handle keeps the abort and aborts again when Pi starts the run.
+- Subagents: a message during a stop no longer lets the old session run.
+  The dispose of a child's session now aborts the prompt in flight and waits
+  for it, so Pi's listener can stop the run (F2).
+- Subagents: a second stop of a child that a message relaunched during the
+  first stop is no longer refused as "already ended" (F3).
+- Subagents: an old stop that ends late no longer clears the marks of a
+  newer stop. `stopping()` stays true until the newer stop's report is up,
+  and a stop by the parent stays silent. A run that a message started after
+  a stop by the parent now reports when it ends (F4).
+- Subagents: a message steered while the child's `input` handler waits is no
+  longer lost when the run ends first. The run waits until Pi queued the
+  message, then reads it (F5).
+
 ## 0.41.0 - 2026-11-08
 
 ### Added

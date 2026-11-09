@@ -25,15 +25,16 @@ if (holdInput) hold(id);
 await team.send("main", "kid", "MSG-ONE: also do Y.");
 await sleep(100);
 const afterSend = { state: team.get("kid")!.state, unread: team.get("kid")!.unread, queued: launches[0]!.session.agent.hasQueuedMessages() };
-// 3. The bash call ends, and the run ends before the steer reaches Pi's queue.
+// 3. The bash call ends. At HEAD the run ends before the steer reaches Pi's queue; with the fix it waits for the steer.
 open("bash-1");
-await until("the run ends", () => team.get("kid")!.state !== "running");
+await until("the run ends", () => team.get("kid")!.state !== "running", 1_500).catch(() => undefined);
 await sleep(300);
 const atEnd = { state: team.get("kid")!.state, unread: team.get("kid")!.unread, inbox: team.get("kid")!.inbox, queued: launches[0]!.session.agent.hasQueuedMessages(), reports: reports.length };
-// 4. The input handler ends: the steer lands in the idle session's queue.
+// 4. The input handler ends: the steer lands in Pi's queue.
 release(id);
+await until("the run ends after the steer", () => team.get("kid")!.state !== "running");
 await sleep(300);
-const afterSteerLands = { queued: launches[0]!.session.agent.hasQueuedMessages(), inTranscript: JSON.stringify(launches[0]!.session.messages).includes("MSG-ONE") };
+const afterSteerLands = { state: team.get("kid")!.state, queued: launches[0]!.session.agent.hasQueuedMessages(), inTranscript: JSON.stringify(launches[0]!.session.messages).includes("MSG-ONE") };
 // 5. The quiet-spell timer releases the idle session (sessions.ts:140-143), called here at once.
 if (team.get("kid")!.state === "idle") await (team as any).sessions.release("kid");
 await sleep(200);
