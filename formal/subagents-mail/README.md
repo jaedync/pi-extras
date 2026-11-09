@@ -119,7 +119,7 @@ The model does not cover:
 - The fake transcript has no aborted assistant message after Esc.
 - Liveness: the model checks safety. `wokenForMail` checks the quiet states only.
 
-## Results (sync commit `fe4d93b`)
+## Results (sync commit `343e195`)
 
 Run `node skills/formal-verification/scripts/fv.mjs check formal/subagents-mail --workers 2`.
 `results.json` holds the last run. Three agents shared one Apalache server

@@ -149,6 +149,7 @@ try {
 	const reminded = state.seen.some((request) => request.endsWith("(reminded)"));
 	const after = state.seen.slice(state.seen.indexOf("summary") + 1);
 	console.log(JSON.stringify({ path: control ? "control: note during a user turn" : "bug: note started the turn", seen: state.seen, turnsAfterCompaction: after.length, reminded, transcript: transcript(session) }, null, 2));
+	process.exitCode = reminded ? 0 : 1;
 } finally {
 	close();
 }
