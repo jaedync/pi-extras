@@ -13,7 +13,7 @@
     "stopHonored",
     "parentStopSilent"
   ],
-  "syncCommit": "f597def",
+  "syncCommit": "cb4faf7",
   "covers": [
     {
       "path": "lib/subagents/team.ts",

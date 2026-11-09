@@ -566,7 +566,7 @@ f194608 and passes now:
 |---|---|---|
 | `tests/subagents-lifecycle-repros-sdk.test.mts` | F1 to F5: runs each repro script and its control with real Pi sessions (about 15 s); `repro-f2.mts --late` (review) | 5 of 5 fail; the `--late` test is new |
 | `tests/subagents-stop-relaunch.test.ts` | F3, F4 (both marks, and the silenced report of a relaunched run) on fake sessions | 4 of 4 fail |
-| `tests/subagents-child-prompt.test.ts` | F1, F2, F5 on the gate and the disposer, with a fake session; the compaction abort, the `GATE_WAIT_MS` bounds and the agent listener after `shut` (review) | the module did not exist; with the first fix's gate (ede4521), 5 of 10 fail: the compaction, the 3 bound and listener tests, and the F5 test, which calls the new `steering()` |
+| `tests/subagents-child-prompt.test.ts` | F1, F2, F5 on the gate and the disposer, with a fake session; the compaction abort, the `GATE_WAIT_MS` bounds and the agent listener after `shut` (review) | the module did not exist; with the first fix's gate (f597def), 5 of 10 fail: the compaction, the 3 bound and listener tests, and the F5 test, which calls the new `steering()` |
 | `tests/subagents-check-steer.test.ts` | F5 at the check boundary (review, high) | fails |
 | `tests/subagents-lifecycle-conformance.test.mts` | the replay and the finding paths | the traces of the fixed model fail at the finding steps |
 
