@@ -1,6 +1,6 @@
 import { calculateContextTokens, convertToLlm, estimateTokens, type ExtensionAPI, type ExtensionContext, type SessionEntry, type SessionProjection, type SessionBeforeCompactEvent, SettingsManager, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { CONFIG_FILE, readSection } from "../lib/extras-config.ts";
-import { buildInstruction, capturePayload, fallbackReason, fileLists, fingerprint, formatFiles, idleLimitMs, isLocalCompletions, loadConfig, mergePayload, payloadHashes, reconcile, requestEffort, safeHeaders, type RequestIdentity, type RequestEffort, type Snapshot } from "../lib/cache-compaction/core.ts";
+import { buildInstruction, capturePayload, fallbackReason, fileLists, fingerprint, formatFiles, idleLimitMs, isLocalCompletions, loadConfig, mergePayload, payloadHashes, reconcile, requestEffort, requestWindow, safeHeaders, type RequestIdentity, type RequestEffort, type Snapshot } from "../lib/cache-compaction/core.ts";
 import { backgroundDue, backgroundHeaders, backgroundInstruction, fileOpsOf, tailFits, type FileOps } from "../lib/cache-compaction/background.ts";
 import { dirname, join } from "node:path";
 import { operationalLine } from "../lib/operational-log.ts";
@@ -194,7 +194,7 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 		const prompt: Message = { role: "user", content: [{ type: "text", text: backgroundInstruction({ previousSummary: previousSummary !== undefined }) }], timestamp: now() };
 		const messages = convertToLlm([...captured.messages, prompt]);
 		const estimated = estimateRequestContext(messages);
-		const available = model.contextWindow - estimated.tokens - contextSafetyTokens(estimated.tailTokens);
+		const available = requestWindow(policy, model) - estimated.tokens - contextSafetyTokens(estimated.tailTokens);
 		const floor = summaryOutputFloor(previousSummary);
 		// Held as failed, so later replies above the start point do not try again.
 		if (available < floor) return { captured, controller, ops, result: Promise.resolve({ failure: "context-window" }) };
@@ -362,7 +362,7 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 			const request = prepareRequest(captured, event, ctx, now());
 			if ("fallback" in request) return fallback(request.fallback);
 			const estimated = estimateRequestContext(convertToLlm(request.messages));
-			const available = model.contextWindow - estimated.tokens - contextSafetyTokens(estimated.tailTokens);
+			const available = requestWindow(policy, model) - estimated.tokens - contextSafetyTokens(estimated.tailTokens);
 			metrics = { estimate: estimated.tokens, available, tailTokens: estimated.tailTokens };
 			if (available < floor) return fallback("context-window");
 			if (event.signal.aborted) return fallback("aborted");

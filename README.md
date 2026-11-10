@@ -844,6 +844,7 @@ compaction runs, and the log shows `bounded-failed:request` or
   "cacheCompaction": {
     "enabled": true,
     "idleSeconds": { "anthropic": 3300, "openai-codex": 240 },
+    "requestWindow": { "anthropic/claude-fable-5-2": 1000000 },
     "background": false,
     "backgroundPercent": 90,
     "warm": {
@@ -859,6 +860,13 @@ compaction runs, and the log shows `bounded-failed:request` or
 ```
 
 - `enabled`: `false` leaves Pi's compaction untouched.
+- `requestWindow`: per `provider/model`, the largest request in tokens that
+  the provider accepts. Set it when the model's `contextWindow` in
+  `models.json` is a local compaction policy below the provider's limit.
+  The summary request then uses the room above Pi's window, so a turn that
+  goes past Pi's trigger does not send the compaction to Pi's own path. A
+  value below `contextWindow` has no effect. Do not set it for a local
+  engine whose context is the real limit.
 - `background`: `true` writes the summary ahead of Pi's trigger (see
   "Background summary" above). Default `false`.
 - `backgroundPercent`: the start point, as a percent of Pi's trigger, from 50

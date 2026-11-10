@@ -20,11 +20,11 @@ const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href);
 const usage = { input: 10, output: 2, cacheRead: 90, cacheWrite: 0, totalTokens: 102, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.001 } };
 const textOf = (message: any) => typeof message.content === "string" ? message.content : (message.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n");
 
-async function fixture(api = "anthropic-messages", enabled = true, automatic?: "after" | "pre" | "codex" | "large-anthropic", reserveTokens = 16384, modelMaxTokens?: number, withUsageGuard = false) {
+async function fixture(api = "anthropic-messages", enabled = true, automatic?: "after" | "pre" | "codex" | "large-anthropic", reserveTokens = 16384, modelMaxTokens?: number, withUsageGuard = false, extraConfig: Record<string, unknown> = {}) {
 	const agentDir = mkdtempSync(join(scratch, "agent-"));
 	mkdirSync(agentDir, { recursive: true });
 	const configFile = join(agentDir, "pi-extras.json");
-	writeFileSync(configFile, JSON.stringify({ cacheCompaction: { enabled, idleSeconds: { fixture: 60 } } }));
+	writeFileSync(configFile, JSON.stringify({ cacheCompaction: { enabled, idleSeconds: { fixture: 60 }, ...extraConfig } }));
 	let now = 1_800_000_000_000;
 	let responseMode = "text";
 	let lateTransform = false;
@@ -291,6 +291,16 @@ test("dense unanchored tail falls back despite fitting the old fixed margin", { 
 	const entry = await f.session.compact();
 	assert.notEqual(entry.details?.cachePrefix, true); assert.ok(f.notices.includes("Compaction: default (context-window)"));
 	assert.ok(!f.calls.some((call) => textOf(call.context.messages.at(-1)).includes("COMPACTION CHECKPOINT REQUEST")), "no oversized prefix request was sent");
+});
+test("requestWindow above Pi's window gives the prefix summary room that the local cap does not", { timeout: 15000 }, async (t) => {
+	// Pi's contextWindow can be a local compaction policy below the provider's real limit (answer 861).
+	const f = await fixture("anthropic-messages", true, undefined, 16384, undefined, false, { requestWindow: { "fixture/model": 200000 } }); t.after(() => f.close()); f.setUsage(84000); await f.warm();
+	const last = f.session.messages.at(-1);
+	f.session.sessionManager.appendMessage({ ...last, content: [{ type: "text", text: "1234567890 ".repeat(728) }], timestamp: last.timestamp + 1, usage: { ...usage, input: 0, output: 0, cacheRead: 0, totalTokens: 0 } }); f.session.refreshContext();
+	const entry = await f.session.compact();
+	assert.equal(entry.details?.cachePrefix, true);
+	assert.ok(f.notices.includes("Compaction: prefix-sharing"));
+	assert.ok(f.calls.some((call) => textOf(call.context.messages.at(-1)).includes("COMPACTION CHECKPOINT REQUEST")));
 });
 for (const mode of ["no-pending", "invalid-context", "invalid-payload"]) test(`uncaptured new ${mode} request invalidates the old capture`, { timeout: 15000 }, async (t) => {
 	const f = await fixture(); t.after(() => f.close()); await f.warm();

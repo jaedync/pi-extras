@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { summaryOutputFloor } from "../lib/cache-compaction/estimate.ts";
 import { test } from "node:test";
-import { conversationKey, capturePayload, payloadHashes, mergePayload, loadConfig, idleLimitMs, fallbackReason, fileLists, formatFiles, fingerprint, reconcile, buildInstruction, boundaryIdentifier, MAX_BOUNDARY_IDENTIFIER_CHARS, requestOutputLimit, requestEffort, safeHeaders, isLocalEngineUrl } from "../lib/cache-compaction/core.ts";
+import { conversationKey, capturePayload, payloadHashes, mergePayload, loadConfig, idleLimitMs, fallbackReason, fileLists, formatFiles, fingerprint, reconcile, buildInstruction, boundaryIdentifier, MAX_BOUNDARY_IDENTIFIER_CHARS, requestOutputLimit, requestEffort, safeHeaders, isLocalEngineUrl, requestWindow } from "../lib/cache-compaction/core.ts";
 
 for (const [api, key] of [["anthropic-messages", "messages"], ["openai-completions", "messages"], ["openai-responses", "input"], ["openai-codex-responses", "input"], ["google-generative-ai", "contents"], ["google-vertex", "contents"]]) {
 	test(`payload replay changes only ${key} for ${api}`, () => {
@@ -56,6 +56,14 @@ test("validated idle configuration defaults are conservative except known Meridi
 	assert.equal(idleLimitMs(loadConfig({}), { provider: "anthropic", api: "anthropic-messages", baseUrl: "http://127.0.0.1:3456" }), 55 * 60000);
 	assert.equal(idleLimitMs(loadConfig({}), { provider: "anthropic", api: "anthropic-messages" }), 4 * 60000);
 	assert.equal(idleLimitMs(loadConfig({}), { provider: "openai-codex", api: "openai-codex-responses" }), 4 * 60000);
+});
+test("requestWindow is per provider/model, validated, and never below Pi's window", () => {
+	const c = loadConfig({ requestWindow: { "anthropic/claude-fable-5-2": 1000000, "anthropic/small": 5000, "bad/neg": -1, "bad/str": "9", "bad/frac": 1.5, "bad/huge": 1e12 } });
+	assert.deepEqual(Object.keys(c.requestWindow), ["anthropic/claude-fable-5-2", "anthropic/small"]);
+	assert.equal(requestWindow(c, { provider: "anthropic", id: "claude-fable-5-2", contextWindow: 525000 }), 1000000);
+	assert.equal(requestWindow(c, { provider: "anthropic", id: "small", contextWindow: 10000 }), 10000, "a smaller value cannot shrink Pi's window");
+	assert.equal(requestWindow(c, { provider: "anthropic", id: "other", contextWindow: 300000 }), 300000);
+	assert.equal(requestWindow(loadConfig({ requestWindow: "1000000" }), { provider: "anthropic", id: "claude-fable-5-2", contextWindow: 300000 }), 300000);
 });
 const model = { provider: "anthropic", id: "fixture", api: "anthropic-messages", contextWindow: 10000 };
 const gate = { enabled: true, captured: { ...model, sessionId: "s", at: 100 }, model, sessionId: "s", now: 200, idleMs: 1000, reason: "manual", aborted: false };

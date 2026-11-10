@@ -2,6 +2,19 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Added
+
+- Cache Compaction: `requestWindow`, per `provider/model`, the largest
+  request that the provider accepts when Pi's `contextWindow` is a local
+  compaction policy below it. The prefix summary uses the room above Pi's
+  window. Before, a turn that went a few thousand tokens past Pi's trigger
+  left too little room for the summary, and Pi's own compaction ran
+  (`default (context-window)`). Then it wrote the whole new context to the
+  cache again: 5 of 30 Fable 5.2 compactions on one day, at about $2 more
+  each. A value below Pi's window has no effect.
+
 ## 0.42.2 - 2026-11-09
 
 ### Fixed

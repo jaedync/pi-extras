@@ -10,16 +10,29 @@ export type RequestEffort = NonNullable<NonNullable<Parameters<typeof complete<"
 
 type RecordValue = Record<string, unknown>;
 const object = (v: unknown): v is RecordValue => !!v && typeof v === "object" && !Array.isArray(v);
-export interface Config { readonly enabled: boolean; readonly idleSeconds: Readonly<Record<string, number>>; readonly background: boolean; readonly backgroundPercent: number; readonly warm: WarmConfig }
+export interface Config { readonly enabled: boolean; readonly idleSeconds: Readonly<Record<string, number>>; readonly requestWindow: Readonly<Record<string, number>>; readonly background: boolean; readonly backgroundPercent: number; readonly warm: WarmConfig }
 export interface ModelIdentity { readonly provider: string; readonly id: string; readonly api: string; readonly contextWindow: number; readonly baseUrl?: string }
 export interface RequestIdentity extends ModelIdentity { readonly sessionId: string; readonly at: number }
 
 export function loadConfig(section: RecordValue): Config {
 	const values = object(section.idleSeconds) ? section.idleSeconds : {};
 	const idleSeconds = Object.fromEntries(Object.entries(values).filter(([, v]) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0 && v <= 86400)) as Record<string, number>;
+	const windows = object(section.requestWindow) ? section.requestWindow : {};
+	const requestWindow = Object.fromEntries(Object.entries(windows).filter(([, v]) => typeof v === "number" && Number.isSafeInteger(v) && v > 0 && v <= MAX_REQUEST_WINDOW)) as Record<string, number>;
 	const percent = section.backgroundPercent;
 	const backgroundPercent = typeof percent === "number" && Number.isSafeInteger(percent) && percent >= MIN_BACKGROUND_PERCENT && percent <= MAX_BACKGROUND_PERCENT ? percent : DEFAULT_BACKGROUND_PERCENT;
-	return { enabled: typeof section.enabled === "boolean" ? section.enabled : true, idleSeconds, background: section.background === true, backgroundPercent, warm: loadWarmConfig(section.warm) };
+	return { enabled: typeof section.enabled === "boolean" ? section.enabled : true, idleSeconds, requestWindow, background: section.background === true, backgroundPercent, warm: loadWarmConfig(section.warm) };
+}
+
+/** Larger than any provider window today; a typo with extra zeros must not disable the room check. */
+const MAX_REQUEST_WINDOW = 10_000_000;
+
+/**
+ * The largest request the provider accepts for this model. Pi's contextWindow can be a local compaction policy
+ * below that limit, and the summary request may use the room above it. Never less than Pi's window.
+ */
+export function requestWindow(config: Pick<Config, "requestWindow">, model: Pick<ModelIdentity, "provider" | "id" | "contextWindow">): number {
+	return Math.max(model.contextWindow, config.requestWindow[`${model.provider}/${model.id}`] ?? 0);
 }
 
 /** The owner's choice (answer 439): late enough that few summaries go unused, early enough to finish before Pi's trigger. */
