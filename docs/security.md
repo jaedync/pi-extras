@@ -992,6 +992,17 @@ one empty `vm` context to read `gc` from, and turns the flag off again, so
 with `process.memoryUsage.rss()`. Its only file is `idle-gc.log` in the agent
 directory, written only when a collection fails. `PI_IDLE_GC=off` turns it off.
 
+## Loop Stall
+
+Loop Stall sends nothing anywhere and reads no session data. It runs one
+unref'd timer and a V8 `PerformanceObserver` for GC entries. For a stall it
+reads the main thread's CPU time (`process.threadCpuUsage()`), the process's
+memory use and `/proc/pressure/io`. Its only files are `loop-stall.log` and
+`loop-stall.log.1` in the agent directory, readable only by you. A line holds
+the time, numbers and the labels of slow synchronous operations, such as
+`subagents index save`; never a path, a task or any content.
+`PI_LOOP_STALL=off` turns it off.
+
 ## Reporting
 
 Do not open a public issue containing tokens, session links, auth files, raw

@@ -7,6 +7,7 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, closeSync, fsyncSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { timedSync } from "./sync-ops.ts";
 
 type Json = Record<string, unknown>;
 
@@ -118,13 +119,16 @@ export function writeTextAtomic(file: string, text: string): void {
 	const mode = existingMode(target) ?? NEW_FILE_MODE;
 	const temp = join(dirname(target), `.${basename(target)}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`);
 	try {
-		const fd = openSync(temp, "wx", mode);
-		try {
-			writeFileSync(fd, text);
-			fsyncSync(fd);
-		} finally {
-			closeSync(fd);
-		}
+		// Synchronous on purpose: callers rely on the file being durable when this returns. Rare (settings, update state).
+		timedSync("settings file write", () => {
+			const fd = openSync(temp, "wx", mode);
+			try {
+				writeFileSync(fd, text);
+				fsyncSync(fd);
+			} finally {
+				closeSync(fd);
+			}
+		});
 		// The umask can narrow the mode given to open.
 		chmodSync(temp, mode);
 		renameSync(temp, target);

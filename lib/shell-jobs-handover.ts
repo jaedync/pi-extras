@@ -10,6 +10,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { isJobId } from "./shell-jobs-core.ts";
+import { timedSync } from "./sync-ops.ts";
 
 /** A record that waited longer than this for its session is dropped, and its jobs that are still the recorded processes are stopped. */
 export const HANDOVER_MAX_AGE_MS = 24 * 60 * 60_000;
@@ -92,13 +93,16 @@ export function writeHandover(agentDir: string, record: Handover): string {
 	const path = handoverPath(agentDir, record.sessionFile);
 	const temp = join(dir, `.${basename(path)}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`);
 	try {
-		const fd = openSync(temp, "wx", 0o600);
-		try {
-			writeFileSync(fd, `${JSON.stringify(record)}\n`);
-			fsyncSync(fd);
-		} finally {
-			closeSync(fd);
-		}
+		// Synchronous on purpose: the next copy reads it right after a reload.
+		timedSync("shell-jobs handover write", () => {
+			const fd = openSync(temp, "wx", 0o600);
+			try {
+				writeFileSync(fd, `${JSON.stringify(record)}\n`);
+				fsyncSync(fd);
+			} finally {
+				closeSync(fd);
+			}
+		});
 		chmodSync(temp, 0o600);
 		renameSync(temp, path);
 	} catch (error) {

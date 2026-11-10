@@ -51,6 +51,7 @@
       "extensions/cache-compaction.ts",
       "extensions/link-context.ts",
       "extensions/idle-gc.ts",
+      "extensions/loop-stall.ts",
       "extensions/auto-update.ts"
     ],
     "themes": [

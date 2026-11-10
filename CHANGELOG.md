@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Added
+
+- Loop Stall: a new extension that logs each time Pi's main thread stops for
+  500 ms or more to `loop-stall.log` in the agent directory. Each line gives
+  the length of the stall, the main thread's CPU time and the GC time in it,
+  the slow synchronous file writes that ran in it, and the disk I/O pressure.
+  `PI_LOOP_STALL=off` turns it off; `PI_LOOP_STALL_MS` sets the threshold.
+
 ## 0.42.3 - 2026-11-09
 
 ### Added

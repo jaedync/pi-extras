@@ -19,7 +19,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all nineteen extensions (quota hibernation, computer use and auto-update stay off until you opt in); it makes `quiet` available but does not select it. It also adds the skills `be-ambitious`, `code-slop-rules`, `formal-verification`, `implicit-state-machines`, `ui-redline`, `untangle-codebase` and `walkthrough-video` and the prompt templates `/higher` and `/wider`.
+adds all twenty-one extensions (quota hibernation, computer use and auto-update stay off until you opt in); it makes `quiet` available but does not select it. It also adds the skills `be-ambitious`, `code-slop-rules`, `formal-verification`, `implicit-state-machines`, `ui-redline`, `untangle-codebase` and `walkthrough-video` and the prompt templates `/higher` and `/wider`.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -36,6 +36,7 @@ can still conflict.
 | Subagents | `subagent`, `message` and `stop_subagent` tools, `/subagents`: background child agents on your scoped models that report back, talk to main and to each other, each with a live row above the editor |
 | Bash Default Timeout | Adds a 120-second timeout only when a bash or powershell call omitted one |
 | Idle GC | Once the agent has been idle for 30 seconds, one full garbage collection gives the memory of the last run back to the system |
+| Loop Stall | Logs each time Pi stops answering for 500 ms or more, with what held it: main-thread CPU, GC, slow file writes and disk pressure |
 | Kagi Search | Adds `kagi_search` without replacing existing search/fetch tools |
 | Gov Search | `gov_search` tool: free search of the Firecrawl Government & Legal Index (US statutes, regulations, city codes, court opinions, agency guidance), with filters for jurisdiction, court and citation; no key needed |
 | Voice | Hold or tap ctrl+space to dictate into the editor, transcribed on this machine |
@@ -314,6 +315,14 @@ child's bash without the sandbox that hides them). The model guide is
   the process grew by 16 MB or more since the last one. It waits while a
   subagent works. The pause is tens to a few hundred milliseconds. A failure
   stops it for the session and goes to `idle-gc.log` in the agent directory.
+- `PI_LOOP_STALL=off`: disable Loop Stall. When Pi's main thread stops for
+  500 ms or more (`PI_LOOP_STALL_MS` sets another threshold, 100 or more), Loop
+  Stall adds one line to `loop-stall.log` in the agent directory. The line
+  gives the time, the length of the stall, the main thread's CPU time and the
+  GC time in it, the slow synchronous file writes that ran in it, and the disk
+  I/O pressure (Linux). CPU time close to the stall means JavaScript or GC
+  work; CPU time close to zero means a blocking system call, such as an fsync
+  on a busy disk. At 1 MB the log moves to `loop-stall.log.1`.
 - `PI_CACHE_RETENTION=long`: use the hour-long cache-warmth window when the
   transcript doesn't say. Anthropic replies report hour-long cache writes and
   Status Plus follows them, so a proxy that always writes them, such as
