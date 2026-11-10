@@ -2800,7 +2800,11 @@ notice.
 
 **Restoration.** Children survive `/reload`, restarts and crashes. An
 `index.json` beside their sessions keeps each child's name, settings, state and
-run count, so `message` reaches them again after a restart. It also keeps mail
+run count. Pi writes it in the background as children work, so a slow disk does
+not stop Pi, and at once on a signal, a quit or a hand-over to another version.
+After a hard kill (SIGKILL, out of memory, power loss), the index can be one or
+two writes behind: a child that stopped a moment before can restore as
+interrupted. With the index, `message` reaches the children again after a restart. The index also keeps mail
 that has not reached a child yet: notes in its inbox, the answers it is owed,
 and messages steered into its run that it had not read. After a restart, its
 next run gets that mail first, and an answer it is owed still resumes it.

@@ -195,7 +195,8 @@
 				"lib/tool-display/web.ts": 1,
 				"lib/tool-row.ts": 1,
 				"lib/usage-dollars/collect.ts": 1,
-				"lib/usage-dollars/ledger.ts": 2,
+				"lib/usage-dollars/ledger-parse.ts": 1,
+				"lib/usage-dollars/ledger-read.ts": 1,
 				"lib/usage-dollars/sources.ts": 3,
 				"lib/usage-guard-core.ts": 1,
 				"lib/voice/capture.ts": 2,
@@ -259,7 +260,7 @@
 				"lib/tool-display/artifact-message.ts": 1,
 				"lib/tool-display/compaction.ts": 1,
 				"lib/tool-display/index.ts": 3,
-				"lib/usage-dollars/ledger.ts": 1
+				"lib/usage-dollars/ledger-parse.ts": 1
 			}
 		},
 		"ts-empty-default": {
@@ -618,7 +619,7 @@
 			}
 		},
 		"ts-swallowed-catch": {
-			"count": 100,
+			"count": 101,
 			"files": {
 				"extensions/auto-update.ts": 1,
 				"extensions/cache-compaction.ts": 5,
@@ -666,6 +667,7 @@
 				"lib/subagents/host-state.ts": 1,
 				"lib/subagents/main-watch.ts": 1,
 				"lib/subagents/reports.ts": 1,
+				"lib/subagents/restore.ts": 1,
 				"lib/subagents/serve.ts": 3,
 				"lib/subagents/widget.ts": 1,
 				"lib/tail-row.ts": 1,

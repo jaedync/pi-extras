@@ -1,6 +1,8 @@
 /** Durable roster separate from Pi's transcript, which may not contain a spawn result yet. */
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, openSync, fsyncSync, closeSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { timedSync } from "../sync-ops.ts";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { isReserved, nameFor } from "./names.ts";
 import { isThinking } from "./models.ts";
@@ -177,26 +179,85 @@ function placeSessions(dir: string, records: readonly AgentRecord[], warn: (mess
 	return placed;
 }
 
+/** The slow half of an index write: the data reaches the disk. Tests replace it to try every order of events. */
+export interface IndexIO {
+	writeDurable(file: string, text: string): Promise<void>;
+}
+
+/**
+ * Runs in libuv's thread pool, not on Pi's main thread. On a disk under heavy
+ * writes one fdatasync took 9.6 s, and a synchronous one froze the whole TUI
+ * for that long.
+ */
+const ASYNC_IO: IndexIO = {
+	async writeDurable(file, text) {
+		const handle = await open(file, "wx", 0o600);
+		try { await handle.writeFile(text); await handle.datasync(); }
+		finally { await handle.close(); }
+	},
+};
+
+const THROTTLE_MS = 5_000;
+
+/**
+ * Write order for each index file, shared by every ChildIndex in the process:
+ * a /reload makes a new ChildIndex for the same file (and a new copy of this
+ * module), while a write of the old one may still be in flight.
+ */
+interface FileWrites {
+	/** The generation of the newest write started for each file, sync or async. */
+	readonly generations: Map<string, number>;
+	/** Temporary files of async writes in flight; a load must not remove them. */
+	readonly inFlight: Set<string>;
+}
+
+const WRITES = Symbol.for("pi-extras.subagents.index-writes.v1");
+
+function fileWrites(): FileWrites {
+	const slot = globalThis as { [WRITES]?: FileWrites };
+	slot[WRITES] ??= { generations: new Map(), inFlight: new Set() };
+	return slot[WRITES];
+}
+
+/** Starts a write of `file` and returns its generation; any older write in flight must not rename. */
+function nextGeneration(file: string): number {
+	const { generations } = fileWrites();
+	const generation = (generations.get(file) ?? 0) + 1;
+	generations.set(file, generation);
+	return generation;
+}
+
+const newestGeneration = (file: string): number | undefined => fileWrites().generations.get(file);
+
 export class ChildIndex {
 	readonly file: string;
 	private data: IndexData;
 	private timer: ReturnType<typeof setTimeout> | undefined;
+	/** The records the throttle timer will write. */
+	private scheduled: { records: readonly AgentRecord[]; onError: (error: unknown) => void } | undefined;
 	private lastWrite = 0;
 	private signature = "";
+	/** The one async write in flight; it never rejects. */
+	private writing: Promise<void> | undefined;
+	/** The newest records given while a write was in flight; written when it ends. */
+	private pending: { records: readonly AgentRecord[]; onError: (error: unknown) => void } | undefined;
 
 	readonly dir: string;
 	readonly parentSession: string;
+	private readonly io: IndexIO;
 
-	constructor(dir: string, parentSession: string, cwd: string) {
+	constructor(dir: string, parentSession: string, cwd: string, io: IndexIO = ASYNC_IO) {
 		this.dir = dir;
 		this.parentSession = parentSession;
 		this.file = join(dir, "index.json");
 		this.data = { version: 1, parentSession, cwd, records: [] };
+		this.io = io;
 	}
 
 	load(warn: (message: string) => void): AgentRecord[] {
 		if (existsSync(this.dir)) for (const file of directoryFiles(this.dir, warn)) {
-			if (file.startsWith("index.json.") && file.endsWith(".tmp")) rmSync(join(this.dir, file), { force: true });
+			// A crash leaves these; the one of this process's write in flight is still being written.
+			if (file.startsWith("index.json.") && file.endsWith(".tmp") && !fileWrites().inFlight.has(join(this.dir, file))) rmSync(join(this.dir, file), { force: true });
 		}
 		if (!existsSync(this.file)) return [];
 		const read = JSON.parse(readFileSync(this.file, "utf8")) as IndexData;
@@ -214,33 +275,114 @@ export class ChildIndex {
 		return records.map((r) => ({ ...usableContext(r), usage: { ...r.usage } }));
 	}
 
+	/**
+	 * The hot path: called on every team change. A state change writes at once,
+	 * activity at most every 5 s, and the disk part never runs on the main
+	 * thread. One write is in flight at a time; changes during it merge into one
+	 * next write of the newest records.
+	 */
 	update(records: readonly AgentRecord[], onError: (error: unknown) => void): void {
+		if (this.writing) {
+			this.pending = { records, onError };
+			return;
+		}
 		const signature = this.stateSignature(records);
-		if (signature !== this.signature || Date.now() - this.lastWrite >= 5_000) return this.save(records);
-		if (this.timer) clearTimeout(this.timer);
-		this.timer = setTimeout(() => { try { this.save(records); } catch (error) { onError(error); } }, 5_000 - (Date.now() - this.lastWrite));
+		if (signature !== this.signature || Date.now() - this.lastWrite >= THROTTLE_MS) return this.startWrite(records, signature, onError);
+		this.clearTimer();
+		this.scheduled = { records, onError };
+		this.timer = setTimeout(() => this.runScheduled(), THROTTLE_MS - (Date.now() - this.lastWrite));
 		this.timer.unref?.();
+	}
+
+	/** Resolves once every change given so far is on disk (or its write failed and was reported). */
+	async flush(): Promise<void> {
+		for (;;) {
+			if (this.scheduled && !this.writing) this.runScheduled();
+			if (!this.writing) return;
+			await this.writing;
+		}
+	}
+
+	private clearTimer(): void {
+		if (this.timer) clearTimeout(this.timer);
+		this.timer = undefined;
+		this.scheduled = undefined;
+	}
+
+	private runScheduled(): void {
+		const scheduled = this.scheduled;
+		this.clearTimer();
+		if (!scheduled) return;
+		if (this.writing) { this.pending = scheduled; return; }
+		try { this.startWrite(scheduled.records, this.stateSignature(scheduled.records), scheduled.onError); }
+		catch (error) { report(scheduled.onError, error); }
+	}
+
+	private startWrite(records: readonly AgentRecord[], signature: string, onError: (error: unknown) => void): void {
+		this.clearTimer();
+		const data = this.snapshot(records);
+		const text = `${JSON.stringify(data)}\n`;
+		mkdirSync(this.dir, { recursive: true });
+		const temporary = this.temporaryFile();
+		const generation = nextGeneration(this.file);
+		// Later keepMail and markWorkspaceNotice build on this, as they would on a finished save.
+		this.data = data;
+		fileWrites().inFlight.add(temporary);
+		this.writing = this.io.writeDurable(temporary, text).then(() => {
+			// A write that started later, here or in another ChildIndex for this file, holds newer records.
+			if (generation !== newestGeneration(this.file)) return;
+			// A rename is metadata only; it stays synchronous so no save can land between the check and it.
+			renameSync(temporary, this.file);
+			this.signature = signature;
+			this.lastWrite = Date.now();
+		}).catch((error: unknown) => report(onError, error)).finally(() => {
+			fileWrites().inFlight.delete(temporary);
+			try { rmSync(temporary, { force: true }); }
+			catch (error) { report(onError, error); }
+			this.writing = undefined;
+			const next = this.pending;
+			this.pending = undefined;
+			if (!next) return;
+			try { this.update(next.records, next.onError); }
+			catch (error) { report(next.onError, error); }
+		});
+	}
+
+	private temporaryFile(): string { return `${this.file}.${process.pid}.${randomUUID()}.tmp`; }
+
+	private snapshot(records: readonly AgentRecord[], shutdown?: string, shutdownOwner?: string): IndexData {
+		const { shutdown: _previousShutdown, shutdownOwner: _previousOwner, ...previous } = this.data;
+		return { ...previous, records: records.map((record) => {
+			const { reportFile: _reportFile, ...durable } = record as AgentRecord & { reportFile?: string };
+			return trustedCheckout(durable);
+		}), ...(shutdown ? { shutdown, shutdownOwner } : {}) };
 	}
 
 	private stateSignature(records: readonly AgentRecord[]): string {
 		return JSON.stringify(records.map(({ activity: _activity, work: _work, lastActivityAt: _at, toolCalls: _calls, usage: _usage, contextTokens: _tokens, contextWindow: _window, compactAt: _point, ...state }) => state));
 	}
 
+	/**
+	 * Synchronous and durable before it returns: for a signal, a reload hand-over
+	 * and a session start, where the next process reads the file. It supersedes
+	 * any async write in flight and any change waiting for one.
+	 */
 	save(records: readonly AgentRecord[], shutdown?: string, shutdownOwner?: string): void {
-		if (this.timer) clearTimeout(this.timer);
-		this.timer = undefined;
-		const { shutdown: _previousShutdown, shutdownOwner: _previousOwner, ...previous } = this.data;
-		const data: IndexData = { ...previous, records: records.map((record) => {
-			const { reportFile: _reportFile, ...durable } = record as AgentRecord & { reportFile?: string };
-			return trustedCheckout(durable);
-		}), ...(shutdown ? { shutdown, shutdownOwner } : {}) };
+		const data = this.snapshot(records, shutdown, shutdownOwner);
 		mkdirSync(this.dir, { recursive: true });
-		const temporary = `${this.file}.${process.pid}.${randomUUID()}.tmp`;
+		const temporary = this.temporaryFile();
 		try {
-			const fd = openSync(temporary, "wx", 0o600);
-			try { writeFileSync(fd, `${JSON.stringify(data)}\n`); fsyncSync(fd); }
-			finally { closeSync(fd); }
+			timedSync("subagents index save", () => {
+				const fd = openSync(temporary, "wx", 0o600);
+				try { writeFileSync(fd, `${JSON.stringify(data)}\n`); fsyncSync(fd); }
+				finally { closeSync(fd); }
+			});
 			renameSync(temporary, this.file);
+			// Only a save that landed supersedes the background work; a failed one leaves it to run.
+			// No continuation runs between the rename and this, so no older write can land in between.
+			nextGeneration(this.file);
+			this.clearTimer();
+			this.pending = undefined;
 			this.data = data;
 			this.signature = this.stateSignature(records);
 			this.lastWrite = Date.now();
@@ -267,6 +409,14 @@ export class ChildIndex {
 	get shutdown(): string | undefined { return this.data.shutdown; }
 	get shutdownOwner(): string | undefined { return this.data.shutdownOwner; }
 	get cwd(): string { return this.data.cwd; }
+}
+
+/** An error handler can throw (Pi invalidates UI contexts on reload); the index must keep working. */
+function report(onError: (error: unknown) => void, error: unknown): void {
+	try { onError(error); }
+	catch {
+		// Nothing is left to tell: the handler was the way to tell.
+	}
 }
 
 /** Reports are immutable per run. Old indexes must not reuse an already-written run number. */

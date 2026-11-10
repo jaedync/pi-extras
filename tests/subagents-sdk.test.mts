@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
+import { readChildIndex } from "./support/child-index-file.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "subagents-sdk-"));
 // Set before importing the SDK. This test must never read real settings or credentials.
@@ -396,7 +397,7 @@ test("a real parent SDK reload keeps a running child running, its report reaches
 		const spawn = () => session.agent.state.tools.find((tool: any) => tool.name === "subagent")!;
 		await spawn().execute("spawn-finished", { name: "finished", task: "Finish now", model: "faux/cheap" }, undefined);
 		const dir = join(agentDir, "sessions", "subagents", session.sessionManager.getSessionId());
-		const index = () => JSON.parse(readFileSync(join(dir, "index.json"), "utf8"));
+		const index = () => readChildIndex(join(dir, "index.json"));
 		const record = (name: string) => index().records.find((r: any) => r.name === name);
 		for (let i = 0; i < 200 && record("finished")?.state !== "idle"; i++) await new Promise((r) => setTimeout(r, 10));
 		assert.equal(record("finished")?.state, "idle");

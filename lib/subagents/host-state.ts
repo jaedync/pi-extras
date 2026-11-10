@@ -22,7 +22,7 @@ import { type ThinkingSettings, thinkingFor } from "./models.ts";
 import { MAIN } from "./names.ts";
 import { acquireParent } from "./ownership.ts";
 import { recoveryDecision } from "./recovery.ts";
-import { ChildIndex, legacyRecords, recoverRoster } from "./restore.ts";
+import { ChildIndex, type IndexIO, legacyRecords, recoverRoster } from "./restore.ts";
 import { appendInterruptedRuns, appendRunLog, loggedRunKeys, runKey, runLogEntry, runLogPath } from "./runlog.ts";
 import type { createSessionScanner } from "./session-scan.ts";
 import { installSignalRecorder } from "./signals.ts";
@@ -48,6 +48,8 @@ export interface HostInputs {
 	/** From the host this one replaces: main's running calls, and the lease it holds on the children. */
 	readonly activity?: HostActivity;
 	readonly lease?: () => void;
+	/** How the index reaches the disk; tests hold its writes to try each order of events. */
+	readonly indexIO?: IndexIO;
 }
 
 /** What a resume needs to know about where the session is now. */
@@ -212,7 +214,7 @@ class Host implements HostState {
 		this.binding = new PortBinding(inputs.ports);
 		this.ports = this.binding.ports;
 		const sessionDir = join(agentDir, "sessions", "subagents", sessionId);
-		const index = new ChildIndex(sessionDir, sessionId, inputs.cwd);
+		const index = new ChildIndex(sessionDir, sessionId, inputs.cwd, inputs.indexIO);
 		this.index = index;
 		this.releaseLease = inputs.lease ?? acquireParent(sessionDir);
 		this.place = { index, cwd: inputs.cwd, moved: () => index.cwd !== inputs.cwd };
@@ -278,13 +280,22 @@ class Host implements HostState {
 		this.unsubscribe();
 		// Saved before anything is awaited, so an exit during the close still finds its children interrupted and its mail kept.
 		// A failure is told, as a close told it before handovers: the next start opens the index as it is.
-		try { this.index.save(this.team.list(), this.signalReason ?? reason, this.inputs.owner); }
-		catch (error) { this.notify(`subagents: could not save ${this.index.file}: ${(error as Error).message}`); }
-		try { await closing; }
-		finally {
+		let saved = false;
+		try {
+			this.index.save(this.team.list(), this.signalReason ?? reason, this.inputs.owner);
+			saved = true;
+		} catch (error) { this.notify(`subagents: could not save ${this.index.file}: ${(error as Error).message}`); }
+		try {
+			await closing;
+			// A failed save left newer state to the background write: keep the lease until it lands.
+			if (!saved) await this.index.flush();
+		} finally {
 			if (!this.leaseHandedOver) this.releaseLease();
 			this.binding.close();
 		}
+		// After a save, a write that began before it can no longer land, so the lease need not wait;
+		// the close still waits for it, so no write outlives the host.
+		if (saved) await this.index.flush();
 	}
 
 	/** Puts the saved roster back; when it can't, lets go of what this host took and leaves the index as it was. */

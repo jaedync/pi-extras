@@ -1,12 +1,13 @@
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { setImmediate as tick, setTimeout as sleep } from "node:timers/promises";
 import type { HostState, ParkedHost } from "../lib/subagents/contract.ts";
 import { HOST_VERSION } from "../lib/subagents/contract.ts";
 import { closingHost, parkHost, takeParked } from "../lib/subagents/host.ts";
 import { serveSession } from "../lib/subagents/serve.ts";
+import type { IndexIO } from "../lib/subagents/restore.ts";
 import { hostHarness } from "./support/host-harness.ts";
 
 const cleanups: Array<() => void | Promise<void>> = [];
@@ -500,4 +501,62 @@ test("after a restore, an after agent that stays paused still counts as ended", 
 	assert.equal(reopened.team.get("impl")?.state, "interrupted", "its one automatic resume was used");
 	assert.deepEqual(next.launched, ["review"]);
 	assert.match(h.call("review").text, /- impl was interrupted; that counts as ended/);
+});
+
+test("a close waits for a background index write, so no write outlives the host", async () => {
+	const h = setup();
+	const host = h.open(h.portsFor("only"));
+	h.spawn(host, "Count files");
+	const writes = (globalThis as Record<symbol, { inFlight: Set<string> } | undefined>)[Symbol.for("pi-extras.subagents.index-writes.v1")];
+	assert.ok(writes && writes.inFlight.size > 0, "the spawn started a background write");
+	await host.close();
+	assert.equal(writes.inFlight.size, 0, "the close ended with a write still in flight");
+	assert.equal(index(h.indexFile).shutdown, "quit");
+});
+
+/** An index write that ends only when the test says so. */
+function heldIndexWrites() {
+	const held: Array<() => void> = [];
+	const io: IndexIO = {
+		writeDurable: (file, text) => new Promise<void>((resolve) => { held.push(() => { writeFileSync(file, text, { flag: "wx", mode: 0o600 }); resolve(); }); }),
+	};
+	return { io, held };
+}
+
+test("a close that saved lets go of the lease at once, not after a background write that can no longer land", async () => {
+	const h = setup();
+	const writes = heldIndexWrites();
+	let released = false;
+	const host = h.open(h.portsFor("only"), { lease: () => { released = true; }, indexIO: writes.io });
+	h.spawn(host, "Count files");
+	assert.ok(writes.held.length > 0, "the spawn started a background write");
+	const closed = host.close();
+	// The team's close takes a few turns of the loop; the held write never ends on its own.
+	for (let turn = 0; turn < 200 && !released; turn++) await tick();
+	assert.ok(writes.held.length > 0, "the lease went before the write ended");
+	for (const finish of writes.held.splice(0)) finish();
+	await closed;
+	assert.equal(index(h.indexFile).shutdown, "quit");
+});
+
+test("a close whose save failed keeps the lease until the background write of newer state ends", async (t) => {
+	if (process.getuid?.() === 0) return t.skip("root ignores directory permissions");
+	const h = setup();
+	const writes = heldIndexWrites();
+	let released = false;
+	const host = h.open(h.portsFor("only"), { lease: () => { released = true; }, indexIO: writes.io });
+	h.spawn(host, "Count files");
+	const dir = dirname(h.indexFile);
+	chmodSync(dir, 0o500);
+	let closed: Promise<void>;
+	try { closed = host.close(); }
+	finally { chmodSync(dir, 0o700); }
+	for (let turn = 0; turn < 50; turn++) await tick();
+	assert.equal(released, false, "the lease is kept while the write that holds the newest state runs");
+	while (writes.held.length > 0) {
+		for (const finish of writes.held.splice(0)) finish();
+		for (let turn = 0; turn < 10; turn++) await tick();
+	}
+	await closed;
+	assert.equal(released, true);
 });

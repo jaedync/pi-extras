@@ -38,15 +38,18 @@ test("scanning is parse-only, caches transcripts and messages, and isolates inva
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("index activity updates are throttled, state updates flush, and stale temp files are removed", () => {
+test("index activity updates are throttled, state updates flush, and stale temp files are removed", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "child-index-updates-"));
 	try {
 		const index = new ChildIndex(dir, "parent", dir);
 		index.save([record]);
 		index.update([{ ...record, activity: "writing" }], (error) => assert.fail(String(error)));
-		assert.equal(index.load(warn)[0]?.activity, null);
+		// Activity alone waits for the throttle: nothing new is written yet.
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.equal(new ChildIndex(dir, "parent", dir).load(warn)[0]?.activity, null);
 		index.update([{ ...record, state: "interrupted", activity: "writing" }], (error) => assert.fail(String(error)));
-		assert.equal(index.load(warn)[0]?.state, "interrupted");
+		await index.flush();
+		assert.equal(new ChildIndex(dir, "parent", dir).load(warn)[0]?.state, "interrupted");
 		writeFileSync(join(dir, "index.json.stray.tmp"), "partial");
 		index.load(warn);
 		assert.throws(() => readFileSync(join(dir, "index.json.stray.tmp")));

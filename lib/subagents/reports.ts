@@ -1,13 +1,27 @@
 /** Full reports stay beside the session; completion messages only carry previews. */
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
+import { open } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { reportWithCheck } from "./checks.ts";
 import type { AgentRecord } from "./types.ts";
 import { worktreeFooter } from "./worktree.ts";
 
-type ReportIO = Pick<typeof fs, "statSync" | "openSync" | "writeFileSync" | "fsyncSync" | "closeSync" | "linkSync" | "unlinkSync">;
+type ReportIO = Pick<typeof fs, "statSync" | "openSync" | "writeFileSync" | "closeSync" | "linkSync" | "unlinkSync">;
 type Warn = (message: string) => void;
+type Flush = (file: string) => Promise<void>;
+
+/**
+ * Puts a published report on disk off Pi's main thread. A synchronous fsync
+ * here froze the TUI for seconds at the end of each child run while the disk
+ * was busy. The report is readable from the page cache at
+ * once; only a power loss in the next moments could lose it.
+ */
+export async function flushFile(file: string): Promise<void> {
+	const handle = await open(file, "r");
+	try { await handle.datasync(); }
+	finally { await handle.close(); }
+}
 const NO_HARD_LINKS = new Set(["EPERM", "ENOTSUP", "EXDEV"]);
 
 function warnSafely(warn: Warn, message: string): void {
@@ -34,7 +48,6 @@ function writeExclusive(file: string, text: string, mode: number, io: ReportIO, 
 	let closing = false;
 	try {
 		io.writeFileSync(fd, text, "utf8");
-		io.fsyncSync(fd);
 		closing = true;
 		io.closeSync(fd);
 	} catch (error) {
@@ -46,8 +59,15 @@ function writeExclusive(file: string, text: string, mode: number, io: ReportIO, 
 	}
 }
 
+function flushLater(file: string, flush: Flush, warn: Warn): void {
+	let flushing: Promise<void>;
+	try { flushing = flush(file); }
+	catch (error) { flushing = Promise.reject(error); }
+	flushing.catch((error: unknown) => warnSafely(warn, `subagents: could not flush report ${file}: ${error instanceof Error ? error.message : String(error)}`));
+}
+
 /** Hard-link publication is atomic; exclusive creation preserves no-overwrite on filesystems without links. */
-export function writeReport(sessionFile: string, run: number, text: string, io: ReportIO = fs, warn: Warn = console.warn): string {
+export function writeReport(sessionFile: string, run: number, text: string, io: ReportIO = fs, warn: Warn = console.warn, flush: Flush = flushFile): string {
 	const file = reportFilePath(sessionFile, run);
 	const temp = `${file}.${randomUUID()}.tmp`;
 	const mode = io.statSync(sessionFile).mode & 0o600;
@@ -58,6 +78,7 @@ export function writeReport(sessionFile: string, run: number, text: string, io: 
 			if (!NO_HARD_LINKS.has((error as NodeJS.ErrnoException).code ?? "")) throw error;
 			writeExclusive(file, text, mode, io, warn);
 		}
+		flushLater(file, flush, warn);
 		return file;
 	} finally {
 		try { io.unlinkSync(temp); }

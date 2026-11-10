@@ -13,6 +13,7 @@ import type { HostMessage, HostPorts, HostState } from "../../lib/subagents/cont
 import type { Route } from "../../lib/subagents/contract.ts";
 import { openHost } from "../../lib/subagents/host-state.ts";
 import type { AgentRecord, ChildHandle, ChildHooks, Launcher, SpawnRequest } from "../../lib/subagents/types.ts";
+import type { IndexIO } from "../../lib/subagents/restore.ts";
 
 export interface Call { name: string; text: string; launcher: string; finish(result: string): void }
 
@@ -70,12 +71,13 @@ export function hostHarness(config: Partial<SubagentsConfig> = {}) {
 		modules.push(module);
 		return module;
 	};
-	const open = (module: FakeModule, extra: { lease?: () => void; generation?: number } = {}): HostState => openHost({
+	const open = (module: FakeModule, extra: { lease?: () => void; generation?: number; indexIO?: IndexIO } = {}): HostState => openHost({
 		generation: extra.generation ?? 1, agentDir: join(dir, "agent"), cwd: dir, sessionId: "parent-1", owner: "owner-1",
 		config: { ...DEFAULTS, batchMs: 1, ...config }, branch: () => [],
 		scanner: { branch: () => assert.fail("no transcripts on disk here"), messages: () => [] },
 		ports: module.ports,
 		...(extra.lease ? { lease: extra.lease } : {}),
+		...(extra.indexIO ? { indexIO: extra.indexIO } : {}),
 	});
 	const spawn = (host: HostState, task: string, extra: Partial<SpawnRequest> = {}): string => {
 		const result = host.team.spawn({ task, parent: "main", model: "faux/cheap", readOnly: false, fork: false, blocking: false, ...extra });

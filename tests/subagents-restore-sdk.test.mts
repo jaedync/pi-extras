@@ -7,6 +7,7 @@ import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
+import { readChildIndex } from "./support/child-index-file.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "restore-sdk-"));
 process.env.HOME = scratch;
@@ -50,7 +51,7 @@ test("a recreated parent notifies without requesting the provider, then message 
 	const first = await open();
 	const file = first.sessionFile!;
 	const dir = join(agentDir, "sessions", "subagents", first.sessionManager.getSessionId());
-	const index = () => JSON.parse(readFileSync(join(dir, "index.json"), "utf8"));
+	const index = () => readChildIndex(join(dir, "index.json"));
 	try {
 		faux.setResponses([ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: "sleep 30" }))]);
 		await tool(first, "subagent").execute("spawn", { name: "paused", task: "Inspect the workspace", model: "restore-faux/cheap" });
@@ -139,7 +140,7 @@ test("always makes at most one automatic attempt, even if that attempt is interr
 	try {
 		const first = await open(); sessions.push(first);
 		const file = first.sessionFile!;
-		const index = () => JSON.parse(readFileSync(join(agentDir, "sessions", "subagents", first.sessionManager.getSessionId(), "index.json"), "utf8"));
+		const index = () => readChildIndex(join(agentDir, "sessions", "subagents", first.sessionManager.getSessionId(), "index.json"));
 		faux.setResponses([ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: "sleep 30" }))]);
 		await tool(first, "subagent").execute("first", { name: "one-attempt", task: "Original complete brief", model: "restore-faux/cheap" });
 		await wait(() => index().records[0]?.activity?.startsWith("bash sleep 30") === true);
@@ -189,8 +190,8 @@ test("an out-of-scope child pauses, a moved workspace warns once, and explicit r
 		const result = await tool(second, "message").execute("resume", { to: "saved", text: "Continue" });
 		assert.match(JSON.stringify(result.content), /Model restore-faux\/cheap is not available now, running on restore-faux\/other/);
 		assert.ok(warnings.some((warning) => warning.includes("Model restore-faux/cheap is not available now, running on restore-faux/other")));
-		await wait(() => JSON.parse(readFileSync(join(dir, "index.json"), "utf8")).records[0]?.state === "idle");
-		const restored = JSON.parse(readFileSync(join(dir, "index.json"), "utf8")).records[0];
+		await wait(() => readChildIndex(join(dir, "index.json")).records[0]?.state === "idle");
+		const restored = readChildIndex(join(dir, "index.json")).records[0];
 		assert.equal(restored.model, "restore-faux/other");
 		assert.equal(restored.report, "Default and workspace verified.");
 	} finally { await close(second); }
@@ -202,7 +203,7 @@ test("missing-session resume launches remain retryable and get their own run-log
 	const first = await open();
 	const file = first.sessionFile!;
 	const dir = join(agentDir, "sessions", "subagents", first.sessionManager.getSessionId());
-	const index = () => JSON.parse(readFileSync(join(dir, "index.json"), "utf8"));
+	const index = () => readChildIndex(join(dir, "index.json"));
 	faux.setResponses([ai.fauxAssistantMessage("Initial report.")]);
 	await tool(first, "subagent").execute("spawn", { name: "retryable", task: "Keep my work", model: "restore-faux/cheap" });
 	await wait(() => index().records[0]?.state === "idle");
@@ -234,7 +235,7 @@ test("restoration filesystem warnings use Pi's notification channel, never stder
 	const first = await open();
 	const file = first.sessionFile!;
 	const dir = join(agentDir, "sessions", "subagents", first.sessionManager.getSessionId());
-	const index = () => JSON.parse(readFileSync(join(dir, "index.json"), "utf8"));
+	const index = () => readChildIndex(join(dir, "index.json"));
 	faux.setResponses([ai.fauxAssistantMessage("Done.")]);
 	await tool(first, "subagent").execute("spawn", { name: "saved", task: "Keep my work", model: "restore-faux/cheap" });
 	await wait(() => index().records[0]?.state === "idle");

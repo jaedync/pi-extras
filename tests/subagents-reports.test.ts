@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { latestReportFile, reportFilePath, savedReport, saveReport, writeReport } from "../lib/subagents/reports.ts";
+import { flushFile, latestReportFile, reportFilePath, savedReport, saveReport, writeReport } from "../lib/subagents/reports.ts";
 import { capReport, NOTES_MAX_CHARS, REPORT_MAX_CHARS, reportText } from "../lib/subagents/format.ts";
 import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";
 import { Team } from "../lib/subagents/team.ts";
@@ -307,19 +307,49 @@ test("unsupported hard links fall back to exclusive, flushed writes without over
 	for (const [index, code] of ["EPERM", "ENOTSUP", "EXDEV"].entries()) {
 		const file = reportFilePath(session, index + 1);
 		const writes: Array<{ fd: number; flag: string }> = [];
-		const flushed: number[] = [];
+		const flushed: string[] = [];
+		const flush = async (path: string) => { flushed.push(path); };
 		const io = { ...fs, linkSync() { throw Object.assign(new Error(code), { code }); },
-			openSync(path: fs.PathLike, flag: fs.OpenMode, mode?: fs.Mode | null) { const fd = fs.openSync(path, flag, mode); writes.push({ fd, flag: String(flag) }); return fd; },
-			fsyncSync(fd: number) { flushed.push(fd); fs.fsyncSync(fd); } };
-		assert.equal(writeReport(session, index + 1, "fallback", io), file);
+			openSync(path: fs.PathLike, flag: fs.OpenMode, mode?: fs.Mode | null) { const fd = fs.openSync(path, flag, mode); writes.push({ fd, flag: String(flag) }); return fd; } };
+		assert.equal(writeReport(session, index + 1, "fallback", io, console.warn, flush), file);
 		assert.equal(fs.readFileSync(file, "utf8"), "fallback");
 		assert.equal(fs.statSync(file).mode & 0o777, 0o600);
 		assert.equal(writes.at(-1)!.flag, "wx");
-		assert.ok(flushed.includes(writes.at(-1)!.fd));
-		assert.throws(() => writeReport(session, index + 1, "replacement", io), /EEXIST/);
+		assert.deepEqual(flushed, [file]);
+		assert.throws(() => writeReport(session, index + 1, "replacement", io, console.warn, flush), /EEXIST/);
 		assert.equal(fs.readFileSync(file, "utf8"), "fallback");
 	}
 	assert.ok(fs.readdirSync(join(session, "..")).every((name) => !name.endsWith(".tmp")));
+});
+
+test("a report is published without a synchronous fsync, then flushed in the background", async (t) => {
+	const session = scratch(t);
+	const flushed: string[] = [];
+	let release: () => void = () => {};
+	const io = { ...fs, fsyncSync(): never { throw new Error("a synchronous fsync on Pi's main thread"); } };
+	const file = writeReport(session, 1, "saved in full", io, (message) => assert.fail(message),
+		(path) => { flushed.push(path); return new Promise<void>((resolve) => { release = resolve; }); });
+	assert.equal(fs.readFileSync(file, "utf8"), "saved in full", "the report is readable before its flush ends");
+	assert.deepEqual(flushed, [file]);
+	release();
+});
+
+test("a background flush that fails only warns; the report stays published", async (t) => {
+	const session = scratch(t);
+	const warnings: string[] = [];
+	const file = writeReport(session, 1, "kept", fs, (message) => warnings.push(message), async () => { throw new Error("EIO"); });
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(fs.readFileSync(file, "utf8"), "kept");
+	assert.equal(warnings.length, 1);
+	assert.match(warnings[0]!, /could not flush report.*EIO/);
+});
+
+test("the default flush syncs a real report and fails for a missing one", async (t) => {
+	const session = scratch(t);
+	const file = writeReport(session, 1, "real", fs, (message) => assert.fail(message));
+	await flushFile(file);
+	assert.equal(fs.readFileSync(file, "utf8"), "real");
+	await assert.rejects(flushFile(`${file}.missing`), /ENOENT/);
 });
 
 test("current-run text matches Pi trimming and empty-final-message semantics", async (t) => {

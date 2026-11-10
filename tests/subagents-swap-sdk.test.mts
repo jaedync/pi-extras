@@ -45,6 +45,8 @@ test("a settings change moves a child to a new session at its next turn boundary
 	try {
 		await p.spawn("multi", "Work in two steps");
 		await until("multi waits in its first step", () => p.transcript("multi").includes("multi-step-1-on-build-1"));
+		// The index is written in the background: wait until it holds the run's start.
+		await until("multi's run is in the index", () => p.record("multi")?.state === "running" && p.record("multi")?.startedAt !== undefined);
 		const before = p.record("multi");
 		await p.send("multi", "Also check the docs.");
 		writeFileSync(SETTINGS, JSON.stringify({ hideThinkingBlock: true }));
@@ -82,7 +84,7 @@ test("after a real /reload, a child in a multi-turn run moves to the new code at
 		await until("across waits in its first step", () => p.transcript("across").includes("across-step-1-on-build-1"));
 		code.rebuild();
 		await p.session.reload();
-		assert.equal(p.record("across")?.state, "running", "the reload interrupts nothing");
+		await until("the reload interrupts nothing", () => p.record("across")?.state === "running");
 		release(p, "across-1");
 		await until("its second step runs the new code", () => p.transcript("across").includes("across-step-2-on-build-2"));
 		release(p, "across-2");

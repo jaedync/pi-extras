@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { agentRoot, piAiRoot } from "./pi-runtime.mjs";
+import { readChildIndex } from "./child-index-file.ts";
 
 export const scratch = mkdtempSync(join(tmpdir(), "subagents-handover-"));
 // Set before importing the SDK. This test must never read real settings or credentials.
@@ -139,7 +140,7 @@ export async function parent(packageRoot: string, where: { cwd?: string; trusted
 	const notices: string[] = [];
 	await session.bindExtensions({ mode: "print", uiContext: { notify: (text: string) => notices.push(text) } } as never);
 	const dir = join(agentDir, "sessions", "subagents", session.sessionManager.getSessionId());
-	const record = (name: string) => JSON.parse(readFileSync(join(dir, "index.json"), "utf8")).records.find((r: any) => r.name === name);
+	const record = (name: string) => readChildIndex(join(dir, "index.json")).records.find((r: any) => r.name === name);
 	const tool = (name: string) => session.agent.state.tools.find((t: any) => t.name === name)!;
 	return {
 		session, notices, flags, record,

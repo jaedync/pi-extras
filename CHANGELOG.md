@@ -12,6 +12,22 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   the slow synchronous file writes that ran in it, and the disk I/O pressure.
   `PI_LOOP_STALL=off` turns it off; `PI_LOOP_STALL_MS` sets the threshold.
 
+### Fixed
+
+- Subagents: Pi no longer freezes for seconds while children work on a busy
+  disk. Pi rewrote `index.json` about every 5 seconds with a synchronous
+  fsync on its main thread, and on a disk under heavy writes one fsync took
+  up to 9.6 seconds. The keys did not answer for that time. Now the write
+  and its fdatasync run in the background, one at a time, and the changes
+  that come during a write go into one next write. A signal, a session start
+  and a hand-over of the children to another version of Subagents still write
+  the index at once. An older background write never replaces a newer one,
+  also across a `/reload`. The index can lag the children by the time of one
+  or two writes. If the process is killed hard (SIGKILL, out of memory, power
+  loss) in that time, a restore can find a child as it was a moment before.
+- Subagents: a child's report no longer waits for an fsync on Pi's main
+  thread at the end of its run. The report is published at once and goes to
+  the disk in the background; a flush that fails gives a warning.
 ## 0.42.3 - 2026-11-09
 
 ### Added

@@ -14,7 +14,8 @@ test("/reload interrupts no child; a running child moves to the new code at its 
 		await waitingInBash(p, "alpha");
 		code.rebuild();
 		await p.session.reload();
-		assert.equal(p.record("alpha")?.state, "running", "the reload interrupts nothing");
+		// The index is written in the background; an interrupted child would never read "running".
+		await until("the reload interrupts nothing", () => p.record("alpha")?.state === "running");
 		assert.equal(p.record("alpha")?.interruptedBy, undefined);
 		// delta's session is still open, but a launch now would use the new code, so its next run relaunches.
 		await p.session.agent.state.tools.find((t: any) => t.name === "message").execute("again", { to: "delta", text: "Once more" }, undefined);
@@ -57,7 +58,7 @@ test("a second /reload while the adopted team still works hands the same childre
 		await p.session.reload();
 		code.rebuild();
 		await p.session.reload();
-		assert.equal(p.record("long")?.state, "running");
+		await until("long still runs", () => p.record("long")?.state === "running");
 		await p.spawn("late", "Start after both reloads");
 		await waitingInBash(p, "late");
 		p.release("long");
@@ -84,7 +85,7 @@ test("a launch under way when Pi reloads ends on the code it began with, moves t
 		await until("slow's launch waits at the gate", gate.held);
 		code.rebuild();
 		await p.session.reload();
-		assert.equal(p.record("slow")?.state, "starting", "the reload interrupts no launch");
+		await until("the reload interrupts no launch", () => p.record("slow")?.state === "starting");
 		gate.open();
 		await waitingInBash(p, "slow");
 		p.release("slow");
