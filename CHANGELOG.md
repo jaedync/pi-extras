@@ -2,6 +2,25 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.43.1 - 2026-11-10
+
+### Fixed
+
+- Usage: the report no longer gives two different figures the name
+  `spentTodayUsd`. A monthly meter's growth today is now `meterSpentTodayUsd`
+  (and `meterSpentTodaySinceLocal`). This machine's spend at list price is now
+  `listSpentTodayUsd` per provider, and `listSpentTodayThisMachineUsd` and
+  `listSpentTodayAllPersonalMachinesUsd` in the summary. On a Claude
+  Enterprise meter the two figures differed by a stable factor of 0.76, and
+  agents reported the wrong one.
+- Usage: a monthly meter's dollars now give `meterPerListDollar`, the meter's
+  growth per dollar of list-price spend on this machine over the same time
+  (from $5 of list-price spend). Outside 0.9 to 1.1, a note tells the agent to
+  use the meter figures for the budget and to divide meter dollars by the
+  ratio to get a subagent `maxCost`, which is list price. A second note gives
+  the list-price spend before the first meter reading of the day, which the
+  meter figures do not include.
+
 ## 0.43.0 - 2026-11-09
 
 ### Added
