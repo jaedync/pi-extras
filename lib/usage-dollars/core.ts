@@ -15,7 +15,7 @@
  * Tokenfold sends no start and counts from the cycle start).
  */
 import type { LimitEntry } from "../status-plus-logic.ts";
-import { businessDaysLeft, calendarDaysLeft, isBusinessDay, localDateKey, nextUtcMonthStartMs } from "./calendar.ts";
+import { businessDaysLeft, calendarDaysLeft, isBusinessDay, localDateKey, localDayStartMs, nextUtcMonthStartMs } from "./calendar.ts";
 import { OPENCODE_GO_WINDOW_SHARE, openCodeGoMonthlyCap, type OpenCodeGoPlan } from "./opencode-go.ts";
 import { localTime } from "../usage-time.ts";
 import { sameReset, type WindowEvidence } from "./resets.ts";
@@ -85,8 +85,8 @@ export interface DollarInputs {
 	/** Local transcript spend since local midnight, by provider. */
 	today?: { byProvider: Record<string, number> };
 	tokenfold?: TokenfoldSnapshot;
-	/** Meter growth since the first reading of the local day, by provider. */
-	meterToday?: Record<string, { spentUsd: number; sinceMs: number }>;
+	/** Meter growth from the first reading of the local day (sinceMs) to the latest one (atMs), by provider. */
+	meterToday?: Record<string, { spentUsd: number; sinceMs: number; atMs: number }>;
 	openRouterKey?: OpenRouterKeyInfo;
 	openCodeGo?: { plan: OpenCodeGoPlan; caps: Record<string, number>; models: string[] };
 	/** By sizeKey(); covers the start of a cycle, before 5% is used. */
@@ -131,10 +131,14 @@ export interface BudgetDollars {
 	businessDaysLeft: number;
 	/** What remains, from the start of today, spread over the business days left. */
 	perBusinessDayUsd?: number;
-	spentTodayUsd?: number;
-	spentTodaySinceLocal?: string;
-	/** Today's share minus today's spend; negative when today is over its share. */
+	/** The meter's growth since its first reading today, in the provider's own dollars. */
+	meterSpentTodayUsd?: number;
+	meterSpentTodaySinceLocal?: string;
+	/** Today's share minus today's meter spend; negative when today is over its share. */
 	leftTodayUsd?: number;
+	/** Meter growth per dollar of list-price spend on this machine over the same time. */
+	meterPerListDollar?: number;
+	note?: string;
 }
 
 export interface BalanceDollars {
@@ -149,6 +153,7 @@ export interface BalanceDollars {
 export type EntryDollars = WindowDollars | BudgetDollars | BalanceDollars;
 
 const money = (value: number): number => Math.round(value * 100) / 100;
+const ratio = (value: number): number => Math.round(value * 1000) / 1000;
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
 export function impliedLimitUsd(spentUsd: number, pctUsed: number): number | undefined {
@@ -342,6 +347,41 @@ function windowDollars(provider: string, entry: LimitEntry, inputs: DollarInputs
 	return fromLocal(provider, entry, inputs, window ? "tokenfold other cycle" : undefined, last);
 }
 
+/** Below this list-price spend, the meter's cent rounding and poll timing swamp the ratio. */
+export const MIN_LIST_USD_FOR_RATIO = 5;
+/** A ratio inside this band is list price within noise and gets no note. */
+const RATIO_BAND = { low: 0.9, high: 1.1 };
+/** Spend before the first meter reading under this amount is not worth a note. */
+const MIN_UNMETERED_USD = 1;
+
+const cents = (value: number): string => `$${value.toFixed(2)}`;
+
+/**
+ * The meter can charge a stable fraction of list price (2026-11-10: 0.76 on a
+ * Claude Enterprise meter, over three intervals). Subagent maxCost and costs
+ * are list price, so an agent that sizes a cap from meter dollars must divide
+ * by this. Spend on other machines raises the meter, so the ratio is an upper bound.
+ */
+function meterVsList(provider: string, today: { spentUsd: number; sinceMs: number; atMs: number }, inputs: DollarInputs): { meterPerListDollar?: number; note?: string } {
+	if (!inputs.spend) return {};
+	const listUsd = inputs.spend({ provider, sinceMs: today.sinceMs, untilMs: today.atMs });
+	const perList = listUsd >= MIN_LIST_USD_FOR_RATIO ? ratio(today.spentUsd / listUsd) : undefined;
+	const unmeteredUsd = inputs.spend({ provider, sinceMs: localDayStartMs(inputs.now, inputs.timeZone), untilMs: today.sinceMs });
+	const first = localTime(today.sinceMs, inputs.timeZone);
+	const notes = [
+		perList !== undefined && (perList < RATIO_BAND.low || perList > RATIO_BAND.high)
+			? `Since the first meter reading today (${first}), the meter grew ${cents(today.spentUsd)} and this machine recorded ${cents(listUsd)} at list price: the meter charges about ${Math.round(perList * 100)}% of list price. Use the meter figures for this budget. Subagent maxCost and costs are list price: a cap of X meter dollars is maxCost X / ${perList}. Use on other machines makes this ratio read high.`
+			: "",
+		unmeteredUsd >= MIN_UNMETERED_USD
+			? `Before the first meter reading today (${first}), this machine spent ${cents(unmeteredUsd)} at list price${perList !== undefined ? ` (about ${cents(unmeteredUsd * perList)} on the meter)` : ""}. meterSpentTodayUsd and leftTodayUsd do not include it.`
+			: "",
+	].filter(Boolean);
+	return {
+		...(perList !== undefined ? { meterPerListDollar: perList } : {}),
+		...(notes.length ? { note: notes.join(" ") } : {}),
+	};
+}
+
 function budgetDollars(provider: string, entry: LimitEntry, inputs: DollarInputs): BudgetDollars | undefined {
 	const { usedUsd, limitUsd } = entry;
 	if (!finite(usedUsd) || !finite(limitUsd) || limitUsd <= 0) return undefined;
@@ -368,8 +408,9 @@ function budgetDollars(provider: string, entry: LimitEntry, inputs: DollarInputs
 		calendarDaysLeft: calendarDaysLeft(now, resetMs, timeZone),
 		businessDaysLeft: businessDays,
 		...(perBusinessDayUsd !== undefined ? { perBusinessDayUsd } : {}),
-		...(today ? { spentTodayUsd: money(today.spentUsd), spentTodaySinceLocal: localTime(today.sinceMs, timeZone) } : {}),
+		...(today ? { meterSpentTodayUsd: money(today.spentUsd), meterSpentTodaySinceLocal: localTime(today.sinceMs, timeZone) } : {}),
 		...(today && workday && perBusinessDayUsd !== undefined ? { leftTodayUsd: money(perBusinessDayUsd - today.spentUsd) } : {}),
+		...(today ? meterVsList(provider, today, inputs) : {}),
 	};
 }
 
@@ -395,7 +436,8 @@ export function entryDollars(provider: string, entry: LimitEntry, inputs: Dollar
 }
 
 export interface ProviderDollars {
-	spentTodayUsd?: number;
+	/** This machine's spend today at API list price, from the session files. */
+	listSpentTodayUsd?: number;
 	/** The tightest applicable window's remaining dollars. */
 	remainingUsd?: number;
 	bindingWindow?: string;
@@ -408,8 +450,8 @@ export interface ProviderDollars {
 export interface DollarsSummary {
 	date: string;
 	timeZone: string;
-	spentTodayThisMachineUsd: number;
-	spentTodayAllPersonalMachinesUsd?: number;
+	listSpentTodayThisMachineUsd: number;
+	listSpentTodayAllPersonalMachinesUsd?: number;
 	providers: Record<string, ProviderDollars>;
 	notes: string[];
 }
@@ -422,7 +464,8 @@ export interface SummaryLimit {
 }
 
 const BASE_NOTES = [
-	"Spend is the API list price of the tokens used, from the model catalog, not a bill; meters and balances are the provider's own amounts.",
+	"Spend is the API list price of the tokens used, from the model catalog, not a bill; meters and balances are the provider's own amounts, and a meter can charge less than list price (meterPerListDollar). For a meter budget, use the meter figures (meterSpentTodayUsd, leftTodayUsd), not the list* figures.",
+	"Subagent maxCost and the cost of a finished subagent are list price.",
 	"Subscription windows report percent only: their dollar size is implied by spend in the window divided by the percent used, and moves with the model mix.",
 ];
 
@@ -447,7 +490,7 @@ function tightest(provider: ProviderDollars, window: string, dollars: WindowDoll
 export function dollarsSummary(limits: readonly SummaryLimit[], inputs: DollarInputs): DollarsSummary {
 	const providers: Record<string, ProviderDollars> = {};
 	for (const [provider, usd] of Object.entries(inputs.today?.byProvider ?? {})) {
-		if (usd > 0) providers[provider] = { spentTodayUsd: money(usd) };
+		if (usd > 0) providers[provider] = { listSpentTodayUsd: money(usd) };
 	}
 	for (const limit of limits) {
 		const dollars = limit.dollars;
@@ -461,8 +504,8 @@ export function dollarsSummary(limits: readonly SummaryLimit[], inputs: DollarIn
 	return {
 		date: localDateKey(inputs.now, inputs.timeZone),
 		timeZone: inputs.timeZone,
-		spentTodayThisMachineUsd: money(thisMachine),
-		...(finite(inputs.tokenfold?.costTodayUsd) ? { spentTodayAllPersonalMachinesUsd: money(inputs.tokenfold.costTodayUsd) } : {}),
+		listSpentTodayThisMachineUsd: money(thisMachine),
+		...(finite(inputs.tokenfold?.costTodayUsd) ? { listSpentTodayAllPersonalMachinesUsd: money(inputs.tokenfold.costTodayUsd) } : {}),
 		providers,
 		notes: [...BASE_NOTES],
 	};

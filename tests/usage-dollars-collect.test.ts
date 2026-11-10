@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LimitSnapshot } from "../lib/limit-store.ts";
 import { createDollarsCollector } from "../lib/usage-dollars/collect.ts";
+import { entryDollars } from "../lib/usage-dollars/core.ts";
 
 // The test runner sets PI_OFFLINE=1; these tests fake fetch, and the offline test sets it again.
 delete process.env.PI_OFFLINE;
@@ -136,7 +137,7 @@ test("meter readings anchor the day in a shared file, and later readings measure
 	// Another process reads the same anchor.
 	const second = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: async () => new Response("{}") });
 	const { inputs } = await second.collect(context({ snapshots: meter(1130), now: NOW + HOUR }));
-	assert.deepEqual(inputs.meterToday, { anthropic: { spentUsd: 30, sinceMs: NOW } });
+	assert.deepEqual(inputs.meterToday, { anthropic: { spentUsd: 30, sinceMs: NOW, atMs: NOW } });
 	const stored = JSON.parse(readFileSync(join(dir, "usage-dollars", "meter-day.json"), "utf8"));
 	assert.deepEqual(stored.anthropic, { date: "2026-10-10", usedUsd: 1100, atMs: NOW });
 });
@@ -154,7 +155,7 @@ test("another process's older meter reading that is lower becomes the day anchor
 	assert.deepEqual(stored.anthropic, { date: "2026-10-10", usedUsd: 15, atMs: NOW - HOUR });
 	// "Spent today" counts the 5 USD from the older reading, not the whole month's total.
 	const { inputs } = await later.collect(context({ snapshots: meter(20, NOW), now: NOW }));
-	assert.deepEqual(inputs.meterToday, { anthropic: { spentUsd: 5, sinceMs: NOW - HOUR } });
+	assert.deepEqual(inputs.meterToday, { anthropic: { spentUsd: 5, sinceMs: NOW - HOUR, atMs: NOW } });
 });
 
 test("another process's older meter reading that is higher leaves the day anchor alone", async () => {
@@ -168,7 +169,31 @@ test("another process's older meter reading that is higher leaves the day anchor
 	const stored = JSON.parse(readFileSync(join(dir, "usage-dollars", "meter-day.json"), "utf8"));
 	assert.deepEqual(stored.anthropic, { date: "2026-10-10", usedUsd: 15, atMs: NOW });
 	const { inputs } = await later.collect(context({ snapshots: meter(15, NOW), now: NOW }));
-	assert.deepEqual(inputs.meterToday, { anthropic: { spentUsd: 0, sinceMs: NOW } });
+	assert.deepEqual(inputs.meterToday, { anthropic: { spentUsd: 0, sinceMs: NOW, atMs: NOW } });
+});
+
+test("a meter that grows slower than claude-code's list-price spend reports the ratio end to end", async () => {
+	const dir = agentDir({});
+	// claude-code spend between the first meter reading (NOW - HOUR, fixture spend lands then too) and the latest (NOW).
+	const turn = (cost: number, id: string, atMs: number) => JSON.stringify({
+		type: "message", timestamp: new Date(atMs).toISOString(),
+		message: { role: "assistant", provider: "claude-code", model: "claude-fable-5-2", responseId: id, timestamp: atMs, usage: { totalTokens: 1, cost: { total: cost } } },
+	});
+	writeFileSync(join(dir, "sessions", "--cwd--", "cc.jsonl"), [turn(30, "c1", NOW - HOUR / 2), turn(10, "c2", NOW - HOUR / 4)].join("\n") + "\n");
+	const meter = (usedUsd: number, atMs: number): Array<[string, LimitSnapshot]> =>
+		[["anthropic", { atMs, source: "poll", entries: [{ label: "", kind: "budget", usedUsd, limitUsd: 2000 }] }]];
+	const collector = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: async () => new Response("{}") });
+	collector.observe(meter(1000, NOW - HOUR + 1), NOW - HOUR + 1);
+	const snapshots = meter(1030.4, NOW);
+	const { inputs } = await collector.collect(context({ snapshots, now: NOW }));
+	const dollars = entryDollars("anthropic", snapshots[0]![1].entries[0]!, inputs);
+	assert.equal(dollars?.basis, "meter");
+	if (dollars?.basis !== "meter") return;
+	// 30.40 on the meter per 40 at list price; the fixture's 10 USD at NOW - HOUR came before the first reading.
+	assert.equal(dollars.meterSpentTodayUsd, 30.4);
+	assert.equal(dollars.meterPerListDollar, 0.76);
+	assert.match(String(dollars.note), /76% of list price/);
+	assert.match(String(dollars.note), /\$10\.00 at list price \(about \$7\.60 on the meter\)/);
 });
 
 test("a meter reading taken before local midnight does not anchor today", async () => {
@@ -180,7 +205,7 @@ test("a meter reading taken before local midnight does not anchor today", async 
 	collector.observe(meter(1000, NOW - 20 * HOUR), NOW);
 	collector.observe(meter(1100, NOW - HOUR), NOW);
 	const { inputs } = await collector.collect(context({ snapshots: meter(1130, NOW), now: NOW }));
-	assert.deepEqual(inputs.meterToday, { anthropic: { spentUsd: 30, sinceMs: NOW - HOUR } });
+	assert.deepEqual(inputs.meterToday, { anthropic: { spentUsd: 30, sinceMs: NOW - HOUR, atMs: NOW } });
 });
 
 test("OpenRouter is not asked without an OpenRouter snapshot, and Tokenfold is asked once for concurrent calls", async () => {

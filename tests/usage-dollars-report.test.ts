@@ -37,7 +37,7 @@ test("dollar inputs add figures to each limit and a summary with the collector's
 	assert.equal((five?.dollars as { remainingUsd?: number }).remainingUsd, 400);
 	assert.equal((seven?.dollars as { remainingUsd?: number }).remainingUsd, 100);
 	assert.deepEqual((go?.dollars as { perModel?: unknown }).perModel, { "glm-5.3": { limitUsd: 3, remainingUsd: 3 } });
-	assert.deepEqual(report.dollars?.providers.anthropic, { spentTodayUsd: 42, remainingUsd: 100, bindingWindow: "7d" });
+	assert.deepEqual(report.dollars?.providers.anthropic, { listSpentTodayUsd: 42, remainingUsd: 100, bindingWindow: "7d" });
 	assert.deepEqual(report.dollars?.providers["opencode-go"], { remainingUsdByModel: { "glm-5.3": 3 } });
 	assert.ok(report.dollars?.notes.includes("Tokenfold is not set up."));
 });

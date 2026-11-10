@@ -19,13 +19,14 @@ const REPORT = {
 			dollars: { basis: "plan cap", source: "plan table", perModel: { "deepseek-v4.1-flash": { limitUsd: 12, remainingUsd: 12 }, "glm-5.3": { limitUsd: 3, remainingUsd: 3 } } } },
 		{ provider: "anthropic", window: "", kind: "budget", applies: true, status: "ok", remaining: "$829/$2000",
 			dollars: { basis: "meter", source: "provider", limitUsd: 2000, spentUsd: 1170.83, remainingUsd: 829.17, resetsAt: "", resetsAtLocal: "Sat, Oct 31, 7:00 PM CDT",
-				calendarDaysLeft: 22, businessDaysLeft: 15, perBusinessDayUsd: 55.28, spentTodayUsd: 40, leftTodayUsd: 15.28 } },
+				calendarDaysLeft: 22, businessDaysLeft: 15, perBusinessDayUsd: 55.28, meterSpentTodayUsd: 40, leftTodayUsd: 15.28,
+				meterPerListDollar: 0.763, note: "The meter charges about 76% of list price." } },
 	],
 	dollars: {
-		date: "2026-10-10", timeZone: "America/Chicago", spentTodayThisMachineUsd: 160.3, spentTodayAllPersonalMachinesUsd: 516.1,
+		date: "2026-10-10", timeZone: "America/Chicago", listSpentTodayThisMachineUsd: 160.3, listSpentTodayAllPersonalMachinesUsd: 516.1,
 		providers: {
-			anthropic: { spentTodayUsd: 160.29, remainingUsd: 1893.82, bindingWindow: "7d", unsizedWindows: ["5h"] },
-			"opencode-go": { spentTodayUsd: 0.01, remainingUsdByModel: { "deepseek-v4.1-flash": 12, "glm-5.3": 3 } },
+			anthropic: { listSpentTodayUsd: 160.29, remainingUsd: 1893.82, bindingWindow: "7d", unsizedWindows: ["5h"] },
+			"opencode-go": { listSpentTodayUsd: 0.01, remainingUsdByModel: { "deepseek-v4.1-flash": 12, "glm-5.3": 3 } },
 		},
 		notes: ["Spend is the API list price."],
 	},
@@ -56,7 +57,7 @@ test("the popup names providers and shows each limit's dollars under it", () => 
 	const { h, usage } = opened();
 	usage.click();
 	const output = strip(h.popups.at(-1)!.output(theme, 200, 0));
-	assert.deepEqual(output.slice(0, 10), [
+	assert.deepEqual(output.slice(0, 11), [
 		"anthropic 7d     59%  resets in 4d (Thu 3:00 AM)",
 		"                      $1,893.82 left of $4,619.08, $2,725.26 spent, Tokenfold (all personal machines), 27s old",
 		"anthropic 5h      3%",
@@ -66,7 +67,8 @@ test("the popup names providers and shows each limit's dollars under it", () => 
 		"                      deepseek-v4.1-flash $12.00 of $12.00, glm-5.3 $3.00 of $3.00",
 		"anthropic       $829/$2000",
 		"                      $829.17 left of $2,000.00, resets Sat, Oct 31, 7:00 PM CDT",
-		"                      15 business days left, $55.28 per business day, $40.00 spent today, $15.28 left today",
+		"                      15 business days left, $55.28 per business day, $40.00 spent today on the meter, $15.28 left today, meter 76% of list price",
+		"                      The meter charges about 76% of list price.",
 	]);
 });
 
@@ -78,9 +80,9 @@ test("the popup ends with today's spend and the dollars left per provider", () =
 	assert.ok(start > 0);
 	assert.deepEqual(output.slice(start, start + 6), [
 		"Dollars, 2026-10-10 (America/Chicago)",
-		"today: $160.30 on this machine, $516.10 on all personal machines",
-		"anthropic: $160.29 today, $1,893.82 left (7d), no size yet: 5h",
-		"opencode-go: $0.01 today, deepseek-v4.1-flash $12.00 left, glm-5.3 $3.00 left",
+		"today at list price: $160.30 on this machine, $516.10 on all personal machines",
+		"anthropic: $160.29 list price today, $1,893.82 left (7d), no size yet: 5h",
+		"opencode-go: $0.01 list price today, deepseek-v4.1-flash $12.00 left, glm-5.3 $3.00 left",
 		"",
 		"Spend is the API list price.",
 	]);

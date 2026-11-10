@@ -45,9 +45,11 @@ function meterLines(dollars: BudgetDollars): string[] {
 		join([
 			`${dollars.businessDaysLeft} business days left`,
 			dollars.perBusinessDayUsd !== undefined && `${cents(dollars.perBusinessDayUsd)} per business day`,
-			dollars.spentTodayUsd !== undefined && `${cents(dollars.spentTodayUsd)} spent today`,
+			dollars.meterSpentTodayUsd !== undefined && `${cents(dollars.meterSpentTodayUsd)} spent today on the meter`,
 			dollars.leftTodayUsd !== undefined && `${cents(dollars.leftTodayUsd)} left today`,
+			dollars.meterPerListDollar !== undefined && `meter ${Math.round(dollars.meterPerListDollar * 100)}% of list price`,
 		]),
+		...(dollars.note ? [dollars.note] : []),
 	];
 }
 
@@ -72,7 +74,7 @@ export function limitDollarLines(dollars: EntryDollars | undefined): string[] {
 function providerLine(provider: string, figures: ProviderDollars): string {
 	const models = Object.entries(figures.remainingUsdByModel ?? {}).map(([model, usd]) => `${model} ${cents(usd)} left`);
 	return `${provider}: ${join([
-		figures.spentTodayUsd !== undefined && `${cents(figures.spentTodayUsd)} today`,
+		figures.listSpentTodayUsd !== undefined && `${cents(figures.listSpentTodayUsd)} list price today`,
 		figures.remainingUsd !== undefined && `${cents(figures.remainingUsd)} left (${figures.bindingWindow ?? "tightest window"})`,
 		...models,
 		(figures.unsizedWindows?.length ?? 0) > 0 && `no size yet: ${figures.unsizedWindows!.join(" ")}`,
@@ -82,11 +84,11 @@ function providerLine(provider: string, figures: ProviderDollars): string {
 /** The summary block: a heading, today's spend, then one line per provider. */
 export function summaryLines(summary: DollarsSummary): { heading: string; lines: string[] } {
 	const today = join([
-		`${cents(summary.spentTodayThisMachineUsd)} on this machine`,
-		summary.spentTodayAllPersonalMachinesUsd !== undefined && `${cents(summary.spentTodayAllPersonalMachinesUsd)} on all personal machines`,
+		`${cents(summary.listSpentTodayThisMachineUsd)} on this machine`,
+		summary.listSpentTodayAllPersonalMachinesUsd !== undefined && `${cents(summary.listSpentTodayAllPersonalMachinesUsd)} on all personal machines`,
 	]);
 	return {
 		heading: `Dollars, ${summary.date} (${summary.timeZone})`,
-		lines: [`today: ${today}`, ...Object.entries(summary.providers).map(([provider, figures]) => providerLine(provider, figures))],
+		lines: [`today at list price: ${today}`, ...Object.entries(summary.providers).map(([provider, figures]) => providerLine(provider, figures))],
 	};
 }

@@ -294,7 +294,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		promptGuidelines: [
 			"Use usage before long autonomous work and whenever the user names a usage point (for example: tell me at 60% of the weekly limit); pass setBudget so a warning fires at that point. A budget warns; it does not stop work unless the user said to stop there.",
 			"Usage warnings are not a reason to cut work short: finish tasks that fit in the remaining headroom.",
-			"Before starting subagents, call usage with all: true and size each run's maxCost from dollars.providers.<provider family>.remainingUsd (remainingUsdByModel for OpenCode Go) and, for a monthly meter, leftTodayUsd. Treat implied figures as estimates and leave margin.",
+			"Before starting subagents, call usage with all: true and size each run's maxCost from dollars.providers.<provider family>.remainingUsd (remainingUsdByModel for OpenCode Go) and, for a monthly meter, leftTodayUsd. maxCost is list price: when the meter's dollars give meterPerListDollar, set maxCost to the meter dollars divided by it. Report the meter figures (meterSpentTodayUsd, leftTodayUsd), not the list* figures, as the spend against a meter budget. Treat implied figures as estimates and leave margin.",
 			"When a window near its limit is waitable (resets within a few hours) and work remains, keep going past it: at a clean checkpoint start a background shell job running `sleep <resumeAfterSeconds>` titled \"Wait for usage reset\", end the turn, and continue the task when it completes. Stop and report only when the reset is too far away to wait for, or at a point where the user said to stop.",
 		],
 		parameters: Type.Object({

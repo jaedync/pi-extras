@@ -134,13 +134,13 @@ test("OpenCode Go settings choose Go Plus and override one cap", () => {
 const meter: LimitEntry = { label: "", kind: "budget", usedUsd: 1170.83, limitUsd: 2000, resetMs: Date.UTC(2026, 10, 1), resetApprox: true };
 
 test("a monthly meter on a weekend spreads what remains over the business days left", () => {
-	const dollars = figures("anthropic", meter, inputs({ meterToday: { anthropic: { spentUsd: 4, sinceMs: SAT - 3 * HOUR } } }));
+	const dollars = figures("anthropic", meter, inputs({ meterToday: { anthropic: { spentUsd: 4, sinceMs: SAT - 3 * HOUR, atMs: SAT } } }));
 	assert.equal(dollars?.basis, "meter");
 	assert.equal(dollars?.remainingUsd, 829.17);
 	assert.equal(dollars?.businessDaysLeft, 15);
 	assert.equal(dollars?.calendarDaysLeft, 22);
 	assert.equal(dollars?.perBusinessDayUsd, 55.28);
-	assert.equal(dollars?.spentTodayUsd, 4);
+	assert.equal(dollars?.meterSpentTodayUsd, 4);
 	// A weekend day has no share of its own.
 	assert.equal(dollars?.leftTodayUsd, undefined);
 	assert.equal(dollars?.resetApprox, true);
@@ -148,16 +148,76 @@ test("a monthly meter on a weekend spreads what remains over the business days l
 
 test("on a business day, today's share counts from the start of the day", () => {
 	const monday: LimitEntry = { ...meter, usedUsd: 1210.83 };
-	const dollars = figures("anthropic", monday, inputs({ now: MON, meterToday: { anthropic: { spentUsd: 40, sinceMs: MON - 12 * HOUR } } }));
+	const dollars = figures("anthropic", monday, inputs({ now: MON, meterToday: { anthropic: { spentUsd: 40, sinceMs: MON - 12 * HOUR, atMs: MON } } }));
 	// (789.17 + 40) / 15 = 55.28; 55.28 - 40 = 15.28.
 	assert.equal(dollars?.perBusinessDayUsd, 55.28);
 	assert.equal(dollars?.leftTodayUsd, 15.28);
-	assert.equal(dollars?.spentTodaySinceLocal !== undefined, true);
+	assert.equal(dollars?.meterSpentTodaySinceLocal !== undefined, true);
 });
 
 test("an overspent day reports a negative amount left", () => {
-	const dollars = figures("anthropic", meter, inputs({ now: MON, meterToday: { anthropic: { spentUsd: 100, sinceMs: MON - 12 * HOUR } } }));
+	const dollars = figures("anthropic", meter, inputs({ now: MON, meterToday: { anthropic: { spentUsd: 100, sinceMs: MON - 12 * HOUR, atMs: MON } } }));
 	assert.ok((dollars?.leftTodayUsd ?? 0) < 0);
+});
+
+test("a meter that grows slower than list-price spend reports the ratio and a note that names the governing figures", () => {
+	// 2026-11-10 on op01: the meter grew 46.02 while the session files recorded 60.28 at list price.
+	const since = MON - 5 * HOUR;
+	const monday: LimitEntry = { ...meter, usedUsd: 1216.85 };
+	const queries: SpendQuery[] = [];
+	const dollars = figures("anthropic", monday, inputs({
+		now: MON,
+		meterToday: { anthropic: { spentUsd: 46.02, sinceMs: since, atMs: MON - 60_000 } },
+		spend: (query) => { queries.push(query); return query.sinceMs === since ? 60.28 : 0; },
+	}));
+	assert.equal(dollars?.meterSpentTodayUsd, 46.02);
+	assert.equal(dollars?.spentTodayUsd, undefined);
+	assert.equal(dollars?.meterPerListDollar, 0.763);
+	// The ratio's list spend stops at the meter reading, not at now.
+	assert.deepEqual(queries.find((query) => query.sinceMs === since), { provider: "anthropic", sinceMs: since, untilMs: MON - 60_000 });
+	assert.match(dollars?.note ?? "", /76% of list price/);
+	assert.match(dollars?.note ?? "", /maxCost/);
+});
+
+test("a meter within 10% of list price reports the ratio without a note", () => {
+	const since = MON - 5 * HOUR;
+	const dollars = figures("anthropic", meter, inputs({
+		now: MON,
+		meterToday: { anthropic: { spentUsd: 19, sinceMs: since, atMs: MON } },
+		spend: (query) => query.sinceMs === since ? 20 : 0,
+	}));
+	assert.equal(dollars?.meterPerListDollar, 0.95);
+	assert.equal(dollars?.note, undefined);
+});
+
+test("too little list-price spend since the first reading gives no ratio", () => {
+	const since = MON - HOUR;
+	const dollars = figures("anthropic", meter, inputs({
+		now: MON,
+		meterToday: { anthropic: { spentUsd: 0.5, sinceMs: since, atMs: MON } },
+		spend: (query) => query.sinceMs === since ? 1 : 0,
+	}));
+	assert.equal(dollars?.meterPerListDollar, undefined);
+	assert.equal(dollars?.note, undefined);
+	// Without the ledger there is no ratio either.
+	const blind = figures("anthropic", meter, inputs({ now: MON, meterToday: { anthropic: { spentUsd: 40, sinceMs: since, atMs: MON } } }));
+	assert.equal(blind?.meterPerListDollar, undefined);
+});
+
+test("list-price spend before the first meter reading of the day gets a note with a meter estimate", () => {
+	// The first reading came at 10:00 CDT; this machine spent 1 USD per minute from 08:00.
+	const dayStart = Date.UTC(2026, 9, 12, 5, 0);
+	const since = MON - 2 * HOUR;
+	const spend = (query: SpendQuery) => Math.max(0, query.untilMs - Math.max(query.sinceMs, dayStart + 8 * HOUR)) / 60_000;
+	const dollars = figures("anthropic", meter, inputs({
+		now: MON,
+		meterToday: { anthropic: { spentUsd: 96, sinceMs: since, atMs: MON } },
+		spend,
+	}));
+	assert.equal(dollars?.meterPerListDollar, 0.8);
+	assert.match(dollars?.note ?? "", /Before the first meter reading/);
+	// 120 USD at list price before 10:00, times 0.8.
+	assert.match(dollars?.note ?? "", /\$120\.00 at list price \(about \$96\.00 on the meter\)/);
 });
 
 test("a meter with no reset uses the next UTC month", () => {
@@ -196,12 +256,13 @@ test("the summary names the tightest window and today's spend per provider", () 
 	], inputs({ today: { byProvider: { anthropic: 301.05, "opencode-go": 0.4, "lan-box": 0 } }, tokenfold: { fetchedAtMs: SAT, costTodayUsd: 455.9 } }));
 	assert.equal(summary.date, "2026-10-10");
 	assert.equal(summary.timeZone, TZ);
-	assert.equal(summary.spentTodayThisMachineUsd, 301.45);
-	assert.equal(summary.spentTodayAllPersonalMachinesUsd, 455.9);
-	assert.deepEqual(summary.providers.anthropic, { spentTodayUsd: 301.05, remainingUsd: 90, bindingWindow: "7d" });
-	assert.deepEqual(summary.providers["opencode-go"], { spentTodayUsd: 0.4, remainingUsdByModel: { "glm-5.3": 1 } });
+	assert.equal(summary.listSpentTodayThisMachineUsd, 301.45);
+	assert.equal(summary.listSpentTodayAllPersonalMachinesUsd, 455.9);
+	assert.deepEqual(summary.providers.anthropic, { listSpentTodayUsd: 301.05, remainingUsd: 90, bindingWindow: "7d" });
+	assert.deepEqual(summary.providers["opencode-go"], { listSpentTodayUsd: 0.4, remainingUsdByModel: { "glm-5.3": 1 } });
 	assert.equal(summary.providers["lan-box"], undefined);
 	assert.ok(summary.notes.some((note) => /list price/i.test(note)));
+	assert.ok(summary.notes.some((note) => /maxCost/.test(note)));
 });
 
 test("a model-family window never sets a provider's summary unless it governs the active model", () => {

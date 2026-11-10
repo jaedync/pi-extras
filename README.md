@@ -1084,17 +1084,30 @@ a top-level `dollars` summary.
   spend and limit, the calendar days and business days (Monday to Friday,
   local time zone) until the reset, and `perBusinessDayUsd`. That share
   includes today's spend, so it does not change during the day.
-  `spentTodayUsd` is the meter's growth since the first reading of the local
-  day, and `leftTodayUsd` is today's share minus that spend. A negative value
-  means today is over its share. With no reset from the provider, the next
-  UTC month start is used (`resetApprox`).
+  `meterSpentTodayUsd` is the meter's growth since the first reading of the
+  local day, and `leftTodayUsd` is today's share minus that spend. A negative
+  value means today is over its share. With no reset from the provider, the
+  next UTC month start is used (`resetApprox`).
+  - `meterPerListDollar` is the meter's growth divided by this machine's
+    list-price spend over the same time. It needs at least $5 of list-price
+    spend. A meter can charge less than list price: on 2026-11-10 a Claude
+    Enterprise meter charged 0.76 of list price.
+  - When the ratio is outside 0.9 to 1.1, a note tells the agent to use the
+    meter figures for the budget. Subagent `maxCost` is list price, so a cap
+    of X meter dollars is `maxCost` X / `meterPerListDollar`.
+  - Spend on other machines raises the meter, so the ratio can read high.
+  - When this machine spent $1 or more before the first meter reading of the
+    day, a note gives that amount and a meter estimate.
+    `meterSpentTodayUsd` and `leftTodayUsd` do not include it.
 - **OpenRouter:** the credit balance, the key's spend for the current UTC day,
   the key limit that remains, and the budget that blocks first.
 - **Tool row:** the band adds the dollars left for the active provider. The
   popup shows each limit's dollars under its row, names the provider when
   there is more than one, and ends with the summary. Press `j` in the popup
   to copy the JSON that the model received.
-- **Summary:** `dollars.providers.<provider>` gives `spentTodayUsd`, and
+- **Summary:** `dollars.listSpentTodayThisMachineUsd` (and, with Tokenfold,
+  `listSpentTodayAllPersonalMachinesUsd`) is spend today at list price.
+  `dollars.providers.<provider>` gives `listSpentTodayUsd`, and
   `remainingUsd` with `bindingWindow` for the tightest window. For OpenCode Go,
   it gives `remainingUsdByModel`. `unsizedWindows` names the windows with no
   dollar size yet; `remainingUsd` does not cover them, so plan less spend.

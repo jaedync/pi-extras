@@ -396,7 +396,7 @@ export function createDollarsCollector(options: CollectorOptions) {
 		const today = localDateKey(context.now, timeZone);
 		const meterToday = Object.fromEntries(meterReadings(context.snapshots)
 			.filter((reading) => anchors[reading.provider]?.date === today)
-			.map(({ provider, usedUsd }) => [provider, { spentUsd: Math.max(0, usedUsd - anchors[provider]!.usedUsd), sinceMs: anchors[provider]!.atMs }]));
+			.map(({ provider, usedUsd, atMs }) => [provider, { spentUsd: Math.max(0, usedUsd - anchors[provider]!.usedUsd), sinceMs: anchors[provider]!.atMs, atMs }]));
 		const inputs: DollarInputs = {
 			now: context.now,
 			timeZone,
