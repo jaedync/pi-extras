@@ -38,6 +38,9 @@ type Sdk = typeof import("@earendil-works/pi-coding-agent");
 export const CHILD_TOOL_EXCLUDE: readonly string[] = [
 	"subagent", "message", "stop_subagent", "subagents_enable", "bg_wait", "subagent_supervisor",
 	"agent_send", "agent_request", "list_peers",
+	// pi-intercom. A child runs in main's process, so its copy would join the broker as one more
+	// peer that any session can start a turn in, and would change the process environment that main's copy reads.
+	"intercom", "contact_supervisor",
 	"get_goal", "create_goal", "propose_goal_draft", "complete_goal", "update_goal_progress",
 	"shell_job_start", "shell_job", "computer_use", "windows_use", "usage", "codemode", "tool_search",
 	// Its hook hides tools behind codemode, which a child does not have (extensions/tool-loadout.ts).

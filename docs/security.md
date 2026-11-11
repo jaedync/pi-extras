@@ -594,6 +594,7 @@ these:
 - subagent tools: `subagent`, `message`, `stop_subagent`, `subagents_enable`,
   `bg_wait` and `subagent_supervisor`
 - mesh tools: `agent_send`, `agent_request` and `list_peers`
+- pi-intercom tools: `intercom` and `contact_supervisor`
 - goal tools: `get_goal`, `create_goal`, `propose_goal_draft`,
   `complete_goal` and `update_goal_progress`
 - shell job tools: `shell_job_start` and `shell_job`

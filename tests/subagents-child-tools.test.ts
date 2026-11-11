@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { activityWatch, childExtensionPaths, compactionDone, streamingActivity } from "../lib/subagents/child.ts";
+import { activityWatch, childExtensionPaths, childToolNames, compactionDone, streamingActivity } from "../lib/subagents/child.ts";
 
 const info = (name: string, path: string) => ({ name, sourceInfo: { path } });
 
@@ -17,6 +17,13 @@ test("a child loads only the extension files that own its tools, each once", () 
 		"/pkgs/web-access/index.ts",
 		"/home/u/.pi/agent/extensions/lint.ts",
 	]);
+});
+
+test("a child never gets the tools that reach other sessions, so their extensions do not load in it", () => {
+	const parent = ["read", "bash", "agent_send", "list_peers", "intercom", "contact_supervisor", "web_search"];
+	assert.deepEqual(childToolNames(parent, false), ["read", "bash", "web_search"]);
+	const all = [info("read", "builtin:read"), info("intercom", "/pkgs/pi-intercom/index.ts"), info("contact_supervisor", "/pkgs/pi-intercom/index.ts"), info("web_search", "/pkgs/web-access/index.ts")];
+	assert.deepEqual(childExtensionPaths(all, childToolNames(parent, false)), ["/pkgs/web-access/index.ts"]);
 });
 
 test("built-in, SDK and inline owners are never loaded as files", () => {
