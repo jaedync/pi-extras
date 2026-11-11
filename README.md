@@ -19,7 +19,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all twenty-one extensions (quota hibernation, computer use and auto-update stay off until you opt in); it makes `quiet` available but does not select it. It also adds the skills `be-ambitious`, `code-slop-rules`, `formal-verification`, `implicit-state-machines`, `ui-redline`, `untangle-codebase` and `walkthrough-video` and the prompt templates `/higher` and `/wider`.
+adds all twenty-two extensions (quota hibernation, computer use and auto-update stay off until you opt in); it makes `quiet` available but does not select it. It also adds the skills `be-ambitious`, `code-slop-rules`, `formal-verification`, `implicit-state-machines`, `ui-redline`, `untangle-codebase` and `walkthrough-video` and the prompt templates `/higher` and `/wider`.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
