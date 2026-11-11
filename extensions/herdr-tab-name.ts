@@ -37,7 +37,8 @@ export interface HerdrTabNameOptions {
 	readonly onError?: (error: unknown) => void;
 }
 
-function herdrCli(env: NodeJS.ProcessEnv): (args: readonly string[]) => Promise<string> {
+/** Runs the `herdr` program of this environment, with no shell. */
+export function herdrCli(env: NodeJS.ProcessEnv): (args: readonly string[]) => Promise<string> {
 	const bin = env.HERDR_BIN_PATH?.trim() || "herdr";
 	return (args) => new Promise((resolve, reject) => {
 		execFile(bin, [...args], { timeout: HERDR_TIMEOUT_MS, maxBuffer: HERDR_OUTPUT_MAX, windowsHide: true, env }, (error, stdout) => {

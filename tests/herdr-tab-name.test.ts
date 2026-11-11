@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import herdrTabNameExtension from "../extensions/herdr-tab-name.ts";
+import herdrTabNameExtension, { herdrCli } from "../extensions/herdr-tab-name.ts";
 import { LABEL_MAX, MAX_CHANGES, applies, decide, isCustomLabel, labelFor, locateTab, tabNameSync, type Tab } from "../lib/herdr-tab-name.ts";
 
 const SESSION_FILE = "/home/u/.pi/agent/sessions/--repo--/2026-01-01_abc.jsonl";
@@ -39,9 +39,20 @@ test("locateTab: finds the tab of the pane that reports this session's file", ()
 			{ pane_id: "w1:p9", tab_id: "w1:t2", agent_session: { kind: "path", value: SESSION_FILE } },
 		],
 	);
-	// The pane id from the environment is stale (the pane moved): the session file decides.
-	assert.deepEqual(locateTab(snapshot, { sessionFile: SESSION_FILE, paneId: "w1:p1" }), { tabId: "w1:t2", label: "build", number: 2, paneCount: 1 });
-	assert.deepEqual(locateTab(snapshot, { sessionId: SESSION_FILE, paneId: "w1:p1" })?.tabId, "w1:t2");
+	assert.deepEqual(locateTab(snapshot, { sessionFile: SESSION_FILE, paneId: "w1:p9" }), { tabId: "w1:t2", label: "build", number: 2, paneCount: 1 });
+	// The pane id from the environment is stale (the pane moved, and no pane has the old id): the session file decides.
+	assert.deepEqual(locateTab(snapshot, { sessionFile: SESSION_FILE, paneId: "w0:p4" })?.tabId, "w1:t2");
+	assert.deepEqual(locateTab(snapshot, { sessionId: SESSION_FILE })?.tabId, "w1:t2");
+});
+
+test("locateTab: a session open in another pane is not ours while our own pane has not reported it", () => {
+	const tabs = [{ tab_id: "w1:t1", label: "alpha", number: 1, pane_count: 1 }, { tab_id: "w1:t2", label: "2", number: 2, pane_count: 1 }];
+	const mine = { kind: "path", value: SESSION_FILE };
+	// This process (pane p2) resumed a session that pane p1 has open. Herdr still has the old report for p2, or none.
+	const old = snapshotOf(tabs, [{ pane_id: "w1:p1", tab_id: "w1:t1", agent_session: mine }, { pane_id: "w1:p2", tab_id: "w1:t2", agent_session: { kind: "path", value: "/old.jsonl" } }]);
+	const none = snapshotOf(tabs, [{ pane_id: "w1:p1", tab_id: "w1:t1", agent_session: mine }, { pane_id: "w1:p2", tab_id: "w1:t2" }]);
+	assert.equal(locateTab(old, { sessionFile: SESSION_FILE, paneId: "w1:p2" }), undefined);
+	assert.equal(locateTab(none, { sessionFile: SESSION_FILE, paneId: "w1:p2" }), undefined);
 });
 
 test("locateTab: the pane id counts only for a pane that reports no session", () => {
@@ -378,6 +389,15 @@ function fakePi(sessionName: string | undefined) {
 	const emit = (event: string, ctx: unknown = {}) => { for (const handler of handlers.get(event) ?? []) handler({ type: event }, ctx); };
 	return { pi, handlers, state, emit };
 }
+
+test("herdrCli: a failed call is reported without its arguments, which hold the session name", async () => {
+	const run = herdrCli({ HERDR_BIN_PATH: "/nonexistent/herdr-for-test" });
+	await assert.rejects(run(["tab", "rename", "w1:t1", "secret project name"]), (error: Error) => {
+		assert.match(error.message, /^herdr tab rename failed: ENOENT$/);
+		assert.ok(!error.message.includes("secret"));
+		return true;
+	});
+});
 
 test("extension: outside Herdr it registers nothing", () => {
 	const { pi, handlers } = fakePi(undefined);

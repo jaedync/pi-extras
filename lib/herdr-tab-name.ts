@@ -76,10 +76,12 @@ const objects = (value: unknown): Json[] => (Array.isArray(value) ? value.flatMa
 /**
  * This session's tab in a `herdr api snapshot`. The pane that reports this
  * session (Herdr's Pi integration sends the session file) decides, because
- * the pane id from the environment goes stale when the pane moves. When two
- * panes report it (the same session open twice), only the pane with this
- * process's pane id is ours, and with no such pane none is. The pane id
- * alone counts only for a pane that reports no session at all.
+ * the pane id from the environment goes stale when the pane moves. A pane
+ * with another id that reports this session is ours only when it is the one
+ * such pane and no pane has our id: when our id is still there, that pane
+ * is another process on the same session (`/resume` of a session that is
+ * open elsewhere, before Herdr hears of it). The pane id alone counts only
+ * for a pane that reports no session at all.
  */
 export function locateTab(snapshot: unknown, self: Self): Tab | undefined {
 	const envelope = object(snapshot);
@@ -90,9 +92,9 @@ export function locateTab(snapshot: unknown, self: Self): Tab | undefined {
 	const mine = [self.sessionFile, self.sessionId].filter((value): value is string => !!value);
 	const here = (candidate: Json): boolean => !!self.paneId && candidate.pane_id === self.paneId;
 	const reporting = panes.filter((candidate) => mine.includes(reported(candidate) as string));
-	const pane = reporting.length === 1 ? reporting[0]
-		: reporting.length > 1 ? reporting.find(here)
-		: panes.find((candidate) => here(candidate) && reported(candidate) === undefined);
+	const pane = reporting.find(here)
+		?? (reporting.length === 1 && !panes.some(here) ? reporting[0] : undefined)
+		?? (reporting.length === 0 ? panes.find((candidate) => here(candidate) && reported(candidate) === undefined) : undefined);
 	const tab = pane && objects(body?.tabs).find((candidate) => candidate.tab_id === pane.tab_id);
 	if (!tab || typeof tab.tab_id !== "string" || typeof tab.label !== "string" || typeof tab.pane_count !== "number") return undefined;
 	return { tabId: tab.tab_id, label: tab.label, number: typeof tab.number === "number" ? tab.number : undefined, paneCount: tab.pane_count };
