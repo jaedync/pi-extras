@@ -52,6 +52,7 @@
       "extensions/link-context.ts",
       "extensions/idle-gc.ts",
       "extensions/loop-stall.ts",
+      "extensions/herdr-tab-name.ts",
       "extensions/auto-update.ts"
     ],
     "themes": [

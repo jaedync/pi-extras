@@ -37,6 +37,7 @@ can still conflict.
 | Bash Default Timeout | Adds a 120-second timeout only when a bash or powershell call omitted one |
 | Idle GC | Once the agent has been idle for 30 seconds, one full garbage collection gives the memory of the last run back to the system |
 | Loop Stall | Logs each time Pi stops answering for 500 ms or more, with what held it: main-thread CPU, GC, slow file writes and disk pressure |
+| Herdr Tab Name | In a [Herdr](https://herdr.dev) tab, keeps the session name and the tab label the same: `/name` renames the tab, and a session with no name takes the tab's label |
 | Kagi Search | Adds `kagi_search` without replacing existing search/fetch tools |
 | Gov Search | `gov_search` tool: free search of the Firecrawl Government & Legal Index (US statutes, regulations, city codes, court opinions, agency guidance), with filters for jurisdiction, court and citation; no key needed |
 | Voice | Hold or tap ctrl+space to dictate into the editor, transcribed on this machine |
@@ -323,6 +324,18 @@ child's bash without the sandbox that hides them). The model guide is
   I/O pressure (Linux). CPU time close to the stall means JavaScript or GC
   work; CPU time close to zero means a blocking system call, such as an fsync
   on a busy disk. At 1 MB the log moves to `loop-stall.log.1`.
+- `PI_HERDR_TAB_NAME=off`, or `herdrTabName.enabled: false` in
+  `pi-extras.json`: disable Herdr Tab Name. In a Herdr tab with one pane, it
+  keeps Pi's session name and the tab's label the same. A session that has a
+  name puts it on the tab, at the start and after each `/name` (a name longer
+  than 48 characters is cut). A session with no name takes the tab's label,
+  unless the label is empty or a number. A tab renamed in Herdr renames the
+  session after the next run; when both changed, the session name wins. A
+  session started in a tab that has a label gets that label as its name, also
+  after `/new`. It runs only in the TUI, and not inside tmux or screen, where
+  the pane belongs to the outer program (`PI_HERDR_TAB_NAME=on` runs it
+  there too). A failed `herdr` call changes nothing and goes to
+  `herdr-tab-name.log` in the agent directory.
 - `PI_CACHE_RETENTION=long`: use the hour-long cache-warmth window when the
   transcript doesn't say. Anthropic replies report hour-long cache writes and
   Status Plus follows them, so a proxy that always writes them, such as

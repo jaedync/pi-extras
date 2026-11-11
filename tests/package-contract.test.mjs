@@ -5,14 +5,14 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-test('package explicitly exports twenty-one extensions and one theme', () => {
+test('package explicitly exports twenty-two extensions and one theme', () => {
   const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
   assert.deepEqual(pkg.pi.extensions, [
     'extensions/tab-status.ts', 'extensions/status-plus.ts', 'extensions/usage-guard.ts', 'extensions/rate-limit-recovery.ts', 'extensions/phase-spinner.ts',
     'extensions/shell-jobs.ts', 'extensions/subagents.ts', 'extensions/tool-loadout.ts', 'extensions/bash-default-timeout.ts',
     'extensions/kagi-search.ts', 'extensions/gov-search.ts', 'extensions/voice.ts', 'extensions/computer-use.ts',
     'extensions/tool-display.ts', 'extensions/copy-blocks.ts', 'extensions/release-notes.ts', 'extensions/cache-compaction.ts',
-    'extensions/link-context.ts', 'extensions/idle-gc.ts', 'extensions/loop-stall.ts', 'extensions/auto-update.ts',
+    'extensions/link-context.ts', 'extensions/idle-gc.ts', 'extensions/loop-stall.ts', 'extensions/herdr-tab-name.ts', 'extensions/auto-update.ts',
   ]);
   // The release notes read the changelog from the installed package.
   assert.ok(pkg.files.includes('CHANGELOG.md'));

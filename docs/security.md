@@ -993,6 +993,20 @@ one empty `vm` context to read `gc` from, and turns the flag off again, so
 with `process.memoryUsage.rss()`. Its only file is `idle-gc.log` in the agent
 directory, written only when a collection fails. `PI_IDLE_GC=off` turns it off.
 
+## Herdr Tab Name
+
+Herdr Tab Name runs only when Herdr's environment is present (`HERDR_ENV=1`
+and `HERDR_SOCKET_PATH`), in the TUI. It starts the `herdr` program
+(`HERDR_BIN_PATH`, or `herdr` on the `PATH`) with fixed arguments and no
+shell: `api snapshot` to find the tab of the pane that reports this session,
+and `tab rename <tab id> <label>`. The label is the session name on one line
+with control characters removed, at most 48 characters. In the other
+direction it calls Pi's `setSessionName` with the tab's label. It writes to
+one tab only, the tab that holds this session's pane, and only when that tab
+has one pane. It sends nothing over the network. Its only file is
+`herdr-tab-name.log` in the agent directory, written when a `herdr` call
+fails. `PI_HERDR_TAB_NAME=off` turns it off.
+
 ## Loop Stall
 
 Loop Stall sends nothing anywhere and reads no session data. It runs one
