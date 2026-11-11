@@ -2,6 +2,28 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.44.0 - 2026-11-11
+
+### Added
+
+- Herdr Tab Name: a new extension for Pi in a [Herdr](https://herdr.dev) tab.
+  It keeps the session name and the tab's label the same. A session that has
+  a name puts it on the tab, at the start and after each `/name`. A session
+  with no name takes the tab's label, unless the label is empty or a number.
+  A tab renamed in Herdr renames the session after the next run. Tools that
+  address sessions by name (pi-intercom, for example) then use the name that
+  the tab bar shows. It runs only in the TUI, in a tab with one pane, and not
+  inside tmux or screen. `PI_HERDR_TAB_NAME=off`, or
+  `herdrTabName.enabled: false` in `pi-extras.json`, turns it off.
+
+### Fixed
+
+- Subagents: a child no longer gets pi-intercom's `intercom` and
+  `contact_supervisor` tools. A child runs in main's process, so it loaded a
+  second copy of pi-intercom, joined the broker as one more session that any
+  peer could start a turn in, and changed environment values that main's copy
+  reads.
+
 ## 0.43.1 - 2026-11-10
 
 ### Fixed
