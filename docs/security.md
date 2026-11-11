@@ -1003,9 +1003,13 @@ and `tab rename <tab id> <label>`. The label is the session name on one line
 with control characters removed, at most 48 characters. In the other
 direction it calls Pi's `setSessionName` with the tab's label. It writes to
 one tab only, the tab that holds this session's pane, and only when that tab
-has one pane. It sends nothing over the network. Its only file is
-`herdr-tab-name.log` in the agent directory, written when a `herdr` call
-fails. `PI_HERDR_TAB_NAME=off` turns it off.
+has one pane. When two panes report the same session (one session open
+twice), it uses only the pane that this process started in. It sends nothing
+over the network. Its only file is `herdr-tab-name.log` in the agent
+directory, written when a `herdr` call or the session rename fails, or when
+it stops a run of changes that cause each other. A line for a failed `herdr`
+call names the subcommand and the exit code, not the label.
+`PI_HERDR_TAB_NAME=off` turns it off.
 
 ## Loop Stall
 

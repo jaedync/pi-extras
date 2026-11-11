@@ -16,12 +16,13 @@
 /** The longest label put on a tab, in characters: the tab bar is narrow. */
 export const LABEL_MAX = 48;
 /**
- * Looks in a row before the loop stops until the next request. The rules
- * settle in two (a name taken from the tab, then the check that follows
- * Pi's report of it); the limit is for a Pi or Herdr that does not keep the
- * value it was given, where each look would cause the next one.
+ * Changes in a row before the loop stops until the next request. The rules
+ * settle in two (a name taken from the tab, then that name put back on the
+ * tab when the label was long or padded); the limit is for a Pi or Herdr
+ * that does not keep the value it was given, where each change would cause
+ * the next one. Looks that change nothing are not counted.
  */
-export const MAX_LOOKS = 4;
+export const MAX_CHANGES = 4;
 
 const OFF = new Set(["0", "off", "false", "none"]);
 const ON = new Set(["1", "on", "true"]);
@@ -75,8 +76,10 @@ const objects = (value: unknown): Json[] => (Array.isArray(value) ? value.flatMa
 /**
  * This session's tab in a `herdr api snapshot`. The pane that reports this
  * session (Herdr's Pi integration sends the session file) decides, because
- * the pane id from the environment goes stale when the pane moves. The pane
- * id counts only for a pane that reports no session at all.
+ * the pane id from the environment goes stale when the pane moves. When two
+ * panes report it (the same session open twice), only the pane with this
+ * process's pane id is ours, and with no such pane none is. The pane id
+ * alone counts only for a pane that reports no session at all.
  */
 export function locateTab(snapshot: unknown, self: Self): Tab | undefined {
 	const envelope = object(snapshot);
@@ -85,8 +88,11 @@ export function locateTab(snapshot: unknown, self: Self): Tab | undefined {
 	const panes = objects(body?.panes);
 	const reported = (pane: Json): unknown => object(pane.agent_session)?.value;
 	const mine = [self.sessionFile, self.sessionId].filter((value): value is string => !!value);
-	const pane = panes.find((candidate) => mine.includes(reported(candidate) as string))
-		?? panes.find((candidate) => !!self.paneId && candidate.pane_id === self.paneId && reported(candidate) === undefined);
+	const here = (candidate: Json): boolean => !!self.paneId && candidate.pane_id === self.paneId;
+	const reporting = panes.filter((candidate) => mine.includes(reported(candidate) as string));
+	const pane = reporting.length === 1 ? reporting[0]
+		: reporting.length > 1 ? reporting.find(here)
+		: panes.find((candidate) => here(candidate) && reported(candidate) === undefined);
 	const tab = pane && objects(body?.tabs).find((candidate) => candidate.tab_id === pane.tab_id);
 	if (!tab || typeof tab.tab_id !== "string" || typeof tab.label !== "string" || typeof tab.pane_count !== "number") return undefined;
 	return { tabId: tab.tab_id, label: tab.label, number: typeof tab.number === "number" ? tab.number : undefined, paneCount: tab.pane_count };
@@ -143,33 +149,39 @@ export function tabNameSync(deps: SyncDeps): TabNameSync {
 	let stopped = false;
 	let running: Promise<void> | undefined;
 
-	async function look(): Promise<void> {
+	/** One look; true when it changed a name. */
+	async function look(): Promise<boolean> {
 		const tab = locateTab(await deps.snapshot(), deps.self());
 		// Read after the snapshot: a rename that arrived while Herdr answered counts in this look.
 		const name = deps.name()?.trim() ?? "";
-		if (stopped || !tab) return;
+		if (stopped || !tab) return false;
 		const action = decide(agreed, name, tab);
 		if (action.kind === "rename-tab") {
 			await deps.renameTab(action.tabId, action.label);
 			agreed = { name, label: action.label };
-		} else if (action.kind === "name-session") {
-			// Before the call: Pi reports the new name at once, and that report asks for the next look.
-			agreed = { name: action.name, label: tab.label };
-			deps.setName(action.name);
-		} else if (name !== "" && tab.label === labelFor(name)) {
-			agreed = { name, label: tab.label };
+			return true;
 		}
+		if (action.kind === "name-session") {
+			// Pi reports the new name at once, and that report asks for the next look.
+			// A call that throws agrees on nothing, so the next look tries again.
+			deps.setName(action.name);
+			agreed = { name: action.name, label: tab.label };
+			return true;
+		}
+		if (name !== "" && tab.label === labelFor(name)) agreed = { name, label: tab.label };
+		return false;
 	}
 
 	async function run(): Promise<void> {
-		for (let looks = 0; wanted && !stopped; looks++) {
+		let changes = 0;
+		while (wanted && !stopped) {
 			wanted = false;
-			if (looks === MAX_LOOKS) {
-				deps.onError(new Error(`stopped after ${MAX_LOOKS} looks in a row: each one caused the next`));
+			if (changes === MAX_CHANGES) {
+				deps.onError(new Error(`stopped after ${MAX_CHANGES} changes in a row: each one caused the next`));
 				break;
 			}
 			try {
-				await look();
+				if (await look()) changes++;
 			} catch (error) {
 				// Fail-open: the names stay as they are, and the next request tries again.
 				deps.onError(error);

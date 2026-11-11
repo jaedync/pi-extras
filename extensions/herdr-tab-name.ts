@@ -19,19 +19,30 @@ import { errorText, operationalError } from "../lib/operational-log.ts";
 const LOG_FILE = join(getAgentDir(), "herdr-tab-name.log");
 const HERDR_TIMEOUT_MS = 3_000;
 const HERDR_OUTPUT_MAX = 16 * 1024 * 1024;
+/**
+ * The second look after a session start. On `/new` and `/resume` the pane
+ * still reports the old session until Herdr's own extension has sent the new
+ * one, and the first look then finds no tab.
+ */
+const SECOND_LOOK_MS = 2_000;
 
 export interface HerdrTabNameOptions {
 	readonly env?: NodeJS.ProcessEnv;
 	readonly settings?: Record<string, unknown>;
 	/** Runs `herdr` with these arguments and gives its output. */
 	readonly run?: (args: readonly string[]) => Promise<string>;
+	/** Calls `fn` once after `ms`; the result cancels it. */
+	readonly later?: (fn: () => void, ms: number) => () => void;
+	/** Gets each failure; the default writes it to the log file. */
+	readonly onError?: (error: unknown) => void;
 }
 
 function herdrCli(env: NodeJS.ProcessEnv): (args: readonly string[]) => Promise<string> {
 	const bin = env.HERDR_BIN_PATH?.trim() || "herdr";
 	return (args) => new Promise((resolve, reject) => {
 		execFile(bin, [...args], { timeout: HERDR_TIMEOUT_MS, maxBuffer: HERDR_OUTPUT_MAX, windowsHide: true, env }, (error, stdout) => {
-			if (error) reject(error);
+			// Node's message holds the whole command line, and with it the session name: the log gets only the subcommand.
+			if (error) reject(new Error(`herdr ${args.slice(0, 2).join(" ")} failed: ${String(error.code ?? error.signal ?? "no exit code")}`));
 			else resolve(stdout);
 		});
 	});
@@ -49,11 +60,20 @@ export default function herdrTabNameExtension(pi: ExtensionAPI, options: HerdrTa
 	const env = options.env ?? process.env;
 	if (!applies(env, options.settings ?? readSection("herdrTabName"))) return undefined;
 	const run = options.run ?? herdrCli(env);
+	// Unref'd: a wait in progress never keeps a finished Pi from exiting.
+	const later = options.later ?? ((fn, ms) => { const timer = setTimeout(fn, ms).unref(); return () => clearTimeout(timer); });
+	const onError = options.onError ?? ((error) => operationalError(LOG_FILE, "herdr-tab-name", errorText(error)));
 	let sync: TabNameSync | undefined;
-
-	pi.on("session_start", (_event, ctx) => {
+	let cancelSecondLook: (() => void) | undefined;
+	const stop = () => {
+		cancelSecondLook?.();
+		cancelSecondLook = undefined;
 		sync?.stop();
 		sync = undefined;
+	};
+
+	pi.on("session_start", (_event, ctx) => {
+		stop();
 		// Print, JSON and RPC runs are not the program the tab shows.
 		if (ctx.mode !== "tui") return;
 		const self = { sessionFile: ctx.sessionManager.getSessionFile(), sessionId: ctx.sessionManager.getSessionId(), paneId: env.HERDR_PANE_ID };
@@ -64,16 +84,14 @@ export default function herdrTabNameExtension(pi: ExtensionAPI, options: HerdrTa
 			snapshot: async () => answer(await run(["api", "snapshot"])),
 			// The label is one argument, and Herdr takes it as written, a leading dash too.
 			renameTab: async (tabId, label) => { answer(await run(["tab", "rename", tabId, label])); },
-			onError: (error) => operationalError(LOG_FILE, "herdr-tab-name", errorText(error)),
+			onError,
 		});
 		sync.request();
+		cancelSecondLook = later(() => sync?.request(), SECOND_LOOK_MS);
 	});
 	pi.on("session_info_changed", () => sync?.request());
 	// A tab renamed in Herdr sends Pi no event: look after each run.
 	pi.on("agent_end", () => sync?.request());
-	pi.on("session_shutdown", () => {
-		sync?.stop();
-		sync = undefined;
-	});
+	pi.on("session_shutdown", stop);
 	return { idle: async () => { await sync?.idle(); } };
 }

@@ -331,6 +331,8 @@ child's bash without the sandbox that hides them). The model guide is
   than 48 characters is cut). A session with no name takes the tab's label,
   unless the label is empty or a number. A tab renamed in Herdr renames the
   session after the next run; when both changed, the session name wins. A
+  label set in Herdr that is longer than 48 characters, or has spaces around
+  it, is then written back cut and trimmed. A
   session started in a tab that has a label gets that label as its name, also
   after `/new`. It runs only in the TUI, and not inside tmux or screen, where
   the pane belongs to the outer program (`PI_HERDR_TAB_NAME=on` runs it

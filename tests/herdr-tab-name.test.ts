@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import herdrTabNameExtension from "../extensions/herdr-tab-name.ts";
-import { LABEL_MAX, MAX_LOOKS, applies, decide, isCustomLabel, labelFor, locateTab, tabNameSync, type Tab } from "../lib/herdr-tab-name.ts";
+import { LABEL_MAX, MAX_CHANGES, applies, decide, isCustomLabel, labelFor, locateTab, tabNameSync, type Tab } from "../lib/herdr-tab-name.ts";
 
 const SESSION_FILE = "/home/u/.pi/agent/sessions/--repo--/2026-01-01_abc.jsonl";
 
@@ -52,6 +52,17 @@ test("locateTab: the pane id counts only for a pane that reports no session", ()
 	const taken = snapshotOf(tabs, [{ pane_id: "w1:p1", tab_id: "w1:t1", agent_session: { kind: "path", value: "/other.jsonl" } }]);
 	assert.equal(locateTab(taken, { sessionFile: SESSION_FILE, paneId: "w1:p1" }), undefined);
 	assert.equal(locateTab(silent, { sessionFile: SESSION_FILE }), undefined);
+});
+
+test("locateTab: when two panes report this session, only the pane this process started in is ours", () => {
+	const tabs = [{ tab_id: "w1:t1", label: "alpha", number: 1, pane_count: 1 }, { tab_id: "w1:t2", label: "2", number: 2, pane_count: 1 }];
+	const mine = { kind: "path", value: SESSION_FILE };
+	const twice = snapshotOf(tabs, [{ pane_id: "w1:p1", tab_id: "w1:t1", agent_session: mine }, { pane_id: "w1:p2", tab_id: "w1:t2", agent_session: mine }]);
+	assert.equal(locateTab(twice, { sessionFile: SESSION_FILE, paneId: "w1:p2" })?.tabId, "w1:t2");
+	assert.equal(locateTab(twice, { sessionFile: SESSION_FILE, paneId: "w1:p1" })?.tabId, "w1:t1");
+	// No pane id to tell them apart, or a stale one: neither tab is touched.
+	assert.equal(locateTab(twice, { sessionFile: SESSION_FILE }), undefined);
+	assert.equal(locateTab(twice, { sessionFile: SESSION_FILE, paneId: "w1:p9" }), undefined);
 });
 
 test("locateTab: a snapshot of another shape gives nothing and does not throw", () => {
@@ -108,13 +119,16 @@ test("applies: only inside Herdr, not inside a nested multiplexer, and the switc
 
 /** A Herdr tab and a Pi session held in memory, with the calls counted. */
 function world(initial: { name?: string; label: string; paneCount?: number }) {
-	const state = { name: initial.name ?? "", label: initial.label, paneCount: initial.paneCount ?? 1, failSnapshot: false, failRename: false };
+	const state = { name: initial.name ?? "", label: initial.label, paneCount: initial.paneCount ?? 1, failSnapshot: false, failRename: false, failSetName: false,
+		/** Runs while Herdr answers the next snapshot. */
+		duringSnapshot: undefined as (() => void) | undefined };
 	const calls = { snapshot: 0, rename: [] as string[], setName: [] as string[], errors: [] as string[] };
 	let sync: ReturnType<typeof tabNameSync> | undefined;
 	const deps = {
 		self: () => ({ sessionFile: SESSION_FILE, paneId: "w1:p1" }),
 		name: () => state.name || undefined,
 		setName: (name: string) => {
+			if (state.failSetName) throw new Error("no session to name");
 			calls.setName.push(name);
 			// Pi trims the name and reports the change at once.
 			state.name = name.trim();
@@ -124,8 +138,13 @@ function world(initial: { name?: string; label: string; paneCount?: number }) {
 			calls.snapshot++;
 			await Promise.resolve();
 			if (state.failSnapshot) throw new Error("herdr is down");
-			return snapshotOf([{ tab_id: "w1:t1", label: state.label, number: 1, pane_count: state.paneCount }],
+			const taken = snapshotOf([{ tab_id: "w1:t1", label: state.label, number: 1, pane_count: state.paneCount }],
 				[{ pane_id: "w1:p1", tab_id: "w1:t1", agent_session: { kind: "path", value: SESSION_FILE } }]);
+			const during = state.duringSnapshot;
+			state.duringSnapshot = undefined;
+			during?.();
+			await Promise.resolve();
+			return taken;
 		},
 		renameTab: async (tabId: string, label: string) => {
 			await Promise.resolve();
@@ -200,6 +219,53 @@ test("sync: a failed call is reported, changes nothing, and the next request tri
 	assert.equal(state.label, "build");
 });
 
+test("sync: a name set while Herdr answers counts in the same look", async () => {
+	const { state, calls, sync } = world({ name: "build", label: "build" });
+	state.duringSnapshot = () => { state.name = "chief"; };
+	sync.request();
+	await sync.idle();
+	assert.equal(state.label, "chief");
+	assert.equal(calls.snapshot, 1);
+});
+
+test("sync: a label with spaces around it names the session once and is written back trimmed", async () => {
+	const { state, calls, sync } = world({ label: "  ship " });
+	sync.request();
+	await sync.idle();
+	for (let again = 0; again < 3; again++) {
+		sync.request();
+		await sync.idle();
+	}
+	assert.deepEqual(calls.setName, ["ship"]);
+	assert.deepEqual(calls.rename, ["ship"]);
+	assert.deepEqual(calls.errors, []);
+	assert.deepEqual({ name: state.name, label: state.label }, { name: "ship", label: "ship" });
+});
+
+test("sync: a session rename that throws is reported and tried again at the next request", async () => {
+	const { state, calls, sync } = world({ label: "coordinator" });
+	state.failSetName = true;
+	sync.request();
+	await sync.idle();
+	assert.equal(state.name, "");
+	assert.equal(calls.errors.length, 1);
+	state.failSetName = false;
+	sync.request();
+	await sync.idle();
+	assert.equal(state.name, "coordinator");
+});
+
+test("sync: many requests that change nothing are not taken for a loop", async () => {
+	const { state, calls, sync } = world({ name: "build", label: "build" });
+	let more = 3 * MAX_CHANGES;
+	const again = () => { if (more-- > 0) { state.duringSnapshot = again; sync.request(); } };
+	state.duringSnapshot = again;
+	sync.request();
+	await sync.idle();
+	assert.equal(calls.snapshot, 3 * MAX_CHANGES + 1);
+	assert.deepEqual(calls.errors, []);
+});
+
 test("sync: a Pi that does not keep the name it was given cannot make the looks run without end", async () => {
 	const calls = { snapshot: 0, setName: 0, errors: [] as string[] };
 	let sync: ReturnType<typeof tabNameSync> | undefined;
@@ -218,13 +284,14 @@ test("sync: a Pi that does not keep the name it was given cannot make the looks 
 	});
 	sync.request();
 	await sync.idle();
-	assert.equal(calls.snapshot, MAX_LOOKS);
+	assert.equal(calls.snapshot, MAX_CHANGES);
+	assert.equal(calls.setName, MAX_CHANGES);
 	assert.equal(calls.errors.length, 1);
-	assert.match(calls.errors[0]!, /looks in a row/);
+	assert.match(calls.errors[0]!, /changes in a row/);
 	// The next request starts a new count.
 	sync.request();
 	await sync.idle();
-	assert.equal(calls.snapshot, 2 * MAX_LOOKS);
+	assert.equal(calls.snapshot, 2 * MAX_CHANGES);
 });
 
 test("sync: after stop, nothing more is read or written", async () => {
@@ -253,7 +320,7 @@ function prng(seed: number): () => number {
 
 test("property: in every order of renames, pane changes and failures, the two names settle and agree", async () => {
 	const names = ["", "build", "deploy", "  spaced  name ", "n".repeat(80), "7"];
-	const labels = ["", "1", "7", "build", "ship", "l".repeat(80)];
+	const labels = ["", "1", "7", "build", "ship", "  padded  label ", "l".repeat(80)];
 	for (let seed = 1; seed <= 300; seed++) {
 		const random = prng(seed);
 		const pick = <T>(items: readonly T[]): T => items[Math.floor(random() * items.length)]!;
@@ -288,6 +355,7 @@ test("property: in every order of renames, pane changes and failures, the two na
 		state.paneCount = 1;
 		sync.request();
 		await sync.idle();
+		assert.deepEqual(calls.errors.filter((error) => /in a row/.test(error)), [], `seed ${seed}: the loop guard stopped a run`);
 		const settled = { name: state.name, label: state.label, renames: calls.rename.length, sets: calls.setName.length };
 		for (let again = 0; again < 3; again++) {
 			sync.request();
@@ -333,14 +401,14 @@ test("extension: in the TUI it syncs at session start, on a rename and after eac
 	const ctx = (mode: string) => ({ mode, sessionManager: { getSessionFile: () => SESSION_FILE, getSessionId: () => "abc" } });
 
 	const printed = fakePi(undefined);
-	const printHandle = herdrTabNameExtension(printed.pi as never, { env, settings: {}, run });
+	const printHandle = herdrTabNameExtension(printed.pi as never, { env, settings: {}, run, later: () => () => {}, onError: (error) => { throw error; } });
 	printed.emit("session_start", ctx("print"));
 	printed.emit("agent_end");
 	await printHandle?.idle();
 	assert.deepEqual(calls, []);
 
 	const { pi, state, emit } = fakePi(undefined);
-	const handle = herdrTabNameExtension(pi as never, { env, settings: {}, run });
+	const handle = herdrTabNameExtension(pi as never, { env, settings: {}, run, later: () => () => {}, onError: (error) => { throw error; } });
 	emit("session_start", ctx("tui"));
 	await handle?.idle();
 	assert.equal(state.name, "coordinator");
@@ -358,4 +426,57 @@ test("extension: in the TUI it syncs at session start, on a rename and after eac
 	emit("agent_end");
 	await handle?.idle();
 	assert.equal(calls.length, count);
+});
+
+test("extension: a refusal from Herdr is a failure: the label is not taken as written", async () => {
+	const env = { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/run/herdr.sock", HERDR_PANE_ID: "w1:p1" };
+	const renames: string[] = [];
+	const run = async (args: readonly string[]): Promise<string> => {
+		if (args[0] === "api") {
+			return JSON.stringify(snapshotOf([{ tab_id: "w1:t1", label: "old", number: 1, pane_count: 1 }],
+				[{ pane_id: "w1:p1", tab_id: "w1:t1", agent_session: { kind: "path", value: SESSION_FILE } }]));
+		}
+		renames.push(args[3]!);
+		// Herdr prints a refusal as JSON, also when it exits with 0.
+		return JSON.stringify({ id: "cli:tab:rename", error: { code: "tab_not_found", message: "tab w1:t1 not found" } });
+	};
+	const errors: string[] = [];
+	const { pi, state, emit } = fakePi("build");
+	const handle = herdrTabNameExtension(pi as never, { env, settings: {}, run, later: () => () => {}, onError: (error) => { errors.push(String(error)); } });
+	emit("session_start", { mode: "tui", sessionManager: { getSessionFile: () => SESSION_FILE, getSessionId: () => "abc" } });
+	await handle?.idle();
+	// With the refusal taken for success, this look would see "old" as a new label and name the session from it.
+	emit("agent_end");
+	await handle?.idle();
+	assert.deepEqual(renames, ["build", "build"]);
+	assert.equal(errors.length, 2);
+	assert.match(errors[0]!, /tab_not_found/);
+	assert.deepEqual(state.setNames, []);
+	assert.equal(state.name, "build");
+});
+
+test("extension: after /new the pane still reports the old session, and the second look finds the tab", async () => {
+	const env = { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/run/herdr.sock", HERDR_PANE_ID: "w1:p1" };
+	const pane = { reports: "/old-session.jsonl" };
+	const run = async (): Promise<string> => JSON.stringify(snapshotOf([{ tab_id: "w1:t1", label: "coordinator", number: 1, pane_count: 1 }],
+		[{ pane_id: "w1:p1", tab_id: "w1:t1", agent_session: { kind: "path", value: pane.reports } }]));
+	const timers: { fn: () => void; ms: number; cancelled: boolean }[] = [];
+	const later = (fn: () => void, ms: number) => { const timer = { fn, ms, cancelled: false }; timers.push(timer); return () => { timer.cancelled = true; }; };
+	const { pi, state, emit } = fakePi(undefined);
+	const handle = herdrTabNameExtension(pi as never, { env, settings: {}, run, later, onError: (error) => { throw error; } });
+	const ctx = { mode: "tui", sessionManager: { getSessionFile: () => SESSION_FILE, getSessionId: () => "abc" } };
+	emit("session_start", ctx);
+	await handle?.idle();
+	assert.equal(state.name, undefined, "the pane belongs to another session until Herdr hears of the new one");
+	assert.equal(timers.length, 1);
+	assert.ok(timers[0]!.ms >= 1000);
+	pane.reports = SESSION_FILE;
+	timers[0]!.fn();
+	await handle?.idle();
+	assert.equal(state.name, "coordinator");
+	// A session that ends takes its waiting look with it.
+	emit("session_start", ctx);
+	emit("session_shutdown");
+	assert.equal(timers[1]!.cancelled, true);
+	assert.equal(timers[0]!.cancelled, true);
 });
