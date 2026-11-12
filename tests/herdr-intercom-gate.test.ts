@@ -115,3 +115,22 @@ test("gate: a channel whose snapshot throws is reported and no longer waited for
 	assert.equal(errors.length, 1);
 	assert.equal(timers.length, 0);
 });
+
+test("gate: after one wait that ends with no connection, renames run at once until pi-intercom connects", () => {
+	// pi-intercom with enabled=false (or a broker that is down) listens on the bus but never connects.
+	const intercom = fakeIntercom(false);
+	const { later, timers } = fakeTimers();
+	const ran: string[] = [];
+	const gate = intercomNameGate(intercom.events, { later });
+	gate.run(() => ran.push("a"));
+	timers[0]!.fn();
+	gate.run(() => ran.push("b"));
+	assert.deepEqual(ran, ["a", "b"]);
+	assert.equal(timers.length, 1, "no second wait");
+	// Once it connects, a later disconnect gets the wait back.
+	intercom.connect(true);
+	intercom.connect(false);
+	gate.run(() => ran.push("c"));
+	assert.deepEqual(ran, ["a", "b"]);
+	assert.equal(timers.length, 2);
+});

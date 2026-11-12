@@ -47,6 +47,8 @@ export function intercomNameGate(events: EventEmitterLike | undefined, options: 
 	let channel: ChannelLike | undefined;
 	let pending: (() => void) | undefined;
 	let cancelWait: (() => void) | undefined;
+	// Set when a wait ended with no connection (pi-intercom disabled, or no broker): later renames do not wait 10 s each.
+	let gaveUp = false;
 
 	const flush = () => {
 		cancelWait?.();
@@ -68,7 +70,10 @@ export function intercomNameGate(events: EventEmitterLike | undefined, options: 
 			ownerEligible: false,
 			onReady: (value: ChannelLike) => { channel = value; },
 			onEvent: (event: { type?: unknown; connected?: unknown }) => {
-				if (event?.type === "connection" && event.connected === true) flush();
+				if (event?.type === "connection" && event.connected === true) {
+					gaveUp = false;
+					flush();
+				}
 			},
 		});
 	} catch (error) {
@@ -91,11 +96,14 @@ export function intercomNameGate(events: EventEmitterLike | undefined, options: 
 	return {
 		run(fn) {
 			pending = fn;
-			if (!channel || connected()) {
+			if (!channel || gaveUp || connected()) {
 				flush();
 				return;
 			}
-			cancelWait ??= options.later(flush, options.waitMs ?? INTERCOM_WAIT_MS);
+			cancelWait ??= options.later(() => {
+				gaveUp = true;
+				flush();
+			}, options.waitMs ?? INTERCOM_WAIT_MS);
 		},
 		cancel() {
 			pending = undefined;

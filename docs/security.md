@@ -1011,8 +1011,10 @@ it stops a run of changes that cause each other. A line for a failed `herdr`
 call names the subcommand and the exit code, not the label.
 When pi-intercom is loaded, Herdr Tab Name registers the namespace
 `pi-extras/herdr-tab-name` on pi-intercom's extension channel, in the same
-process. It cannot own the channel, and it sends and stores nothing there: it
-only reads whether the broker connection is up, to time the session rename.
+process. It cannot own the channel, and it publishes and stores nothing
+there: it only reads whether the broker connection is up, to time the
+session rename. pi-intercom tells its local broker the namespace name, as it
+does for each registered extension.
 `PI_HERDR_TAB_NAME=off` turns it off.
 
 ## Loop Stall
