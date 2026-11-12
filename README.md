@@ -336,8 +336,10 @@ child's bash without the sandbox that hides them). The model guide is
   session started in a tab that has a label gets that label as its name, also
   after `/new`. It runs only in the TUI, and not inside tmux or screen, where
   the pane belongs to the outer program (`PI_HERDR_TAB_NAME=on` runs it
-  there too). A failed `herdr` call changes nothing and goes to
-  `herdr-tab-name.log` in the agent directory.
+  there too). With pi-intercom loaded, a session takes the tab's label only
+  after pi-intercom has registered it with its broker (at most 10 s), so
+  that the name reaches the broker. A failed `herdr` call changes nothing
+  and goes to `herdr-tab-name.log` in the agent directory.
 - `PI_CACHE_RETENTION=long`: use the hour-long cache-warmth window when the
   transcript doesn't say. Anthropic replies report hour-long cache writes and
   Status Plus follows them, so a proxy that always writes them, such as

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import herdrTabNameExtension, { herdrCli } from "../extensions/herdr-tab-name.ts";
+import { fakeIntercom } from "./support/fake-intercom.ts";
 import { LABEL_MAX, MAX_CHANGES, applies, decide, isCustomLabel, labelFor, locateTab, tabNameSync, type Tab } from "../lib/herdr-tab-name.ts";
 
 const SESSION_FILE = "/home/u/.pi/agent/sessions/--repo--/2026-01-01_abc.jsonl";
@@ -499,4 +500,71 @@ test("extension: after /new the pane still reports the old session, and the seco
 	emit("session_shutdown");
 	assert.equal(timers[1]!.cancelled, true);
 	assert.equal(timers[0]!.cancelled, true);
+});
+
+/** A tab labelled "coordinator" that holds this session, and a pi with pi-intercom on its event bus. */
+function intercomSetup(sessionName: string | undefined, connected: boolean) {
+	const env = { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/run/herdr.sock", HERDR_PANE_ID: "w1:p1" };
+	const run = async (args: readonly string[]): Promise<string> => args[0] === "api"
+		? JSON.stringify(snapshotOf([{ tab_id: "w1:t1", label: "coordinator", number: 1, pane_count: 1 }],
+			[{ pane_id: "w1:p1", tab_id: "w1:t1", agent_session: { kind: "path", value: SESSION_FILE } }]))
+		: JSON.stringify({ id: "cli:tab:rename", result: { type: "tab_info" } });
+	const intercom = fakeIntercom(connected);
+	const fake = fakePi(sessionName);
+	const timers: { fn: () => void; ms: number; cancelled: boolean }[] = [];
+	const later = (fn: () => void, ms: number) => { const timer = { fn, ms, cancelled: false }; timers.push(timer); return () => { timer.cancelled = true; }; };
+	const pi = { ...fake.pi, events: intercom.events };
+	const handle = herdrTabNameExtension(pi as never, { env, settings: {}, run, later, onError: (error) => { throw error; } });
+	const start = () => fake.emit("session_start", { mode: "tui", sessionManager: { getSessionFile: () => SESSION_FILE, getSessionId: () => "abc" } });
+	return { ...fake, intercom, handle, start, timers };
+}
+
+test("extension: while pi-intercom connects, the tab's label names the session only after the registration is done", async () => {
+	// pi-intercom 0.18.1 drops a presence update sent before its broker registration and keeps the name it registered.
+	const { state, intercom, handle, start } = intercomSetup(undefined, false);
+	start();
+	await handle?.idle();
+	assert.equal(state.name, undefined);
+	assert.deepEqual(state.setNames, []);
+	intercom.connect(true);
+	assert.equal(state.name, "coordinator");
+	assert.deepEqual(state.setNames, ["coordinator"]);
+});
+
+test("extension: with pi-intercom connected, the tab's label names the session at once", async () => {
+	const { state, handle, start } = intercomSetup(undefined, true);
+	start();
+	await handle?.idle();
+	assert.equal(state.name, "coordinator");
+});
+
+test("extension: a name the user gives while the tab's label waits is kept", async () => {
+	const { state, intercom, handle, start } = intercomSetup(undefined, false);
+	start();
+	await handle?.idle();
+	state.name = "mine";
+	intercom.connect(true);
+	assert.equal(state.name, "mine");
+	assert.deepEqual(state.setNames, []);
+});
+
+test("extension: a session that ends drops its waiting name, and a new session registers no second namespace", async () => {
+	const { state, intercom, handle, start, emit } = intercomSetup(undefined, false);
+	start();
+	await handle?.idle();
+	emit("session_shutdown");
+	start();
+	await handle?.idle();
+	assert.equal(intercom.state.registrations.length, 1);
+	intercom.connect(true);
+	assert.deepEqual(state.setNames, ["coordinator"], "the new session sets the name once; the old one sets nothing");
+});
+
+test("extension: a session that has a name never waits for pi-intercom", async () => {
+	const { state, handle, start, timers } = intercomSetup("chief", false);
+	start();
+	await handle?.idle();
+	assert.equal(state.name, "chief");
+	assert.deepEqual(state.setNames, []);
+	assert.ok(timers.every((timer) => timer.ms === 2_000), "only the second look, no name wait");
 });

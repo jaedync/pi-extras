@@ -13,6 +13,7 @@ import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { readSection } from "../lib/extras-config.ts";
+import { intercomNameGate, type IntercomNameGate } from "../lib/herdr-intercom-gate.ts";
 import { applies, tabNameSync, type TabNameSync } from "../lib/herdr-tab-name.ts";
 import { errorText, operationalError } from "../lib/operational-log.ts";
 
@@ -66,9 +67,12 @@ export default function herdrTabNameExtension(pi: ExtensionAPI, options: HerdrTa
 	const onError = options.onError ?? ((error) => operationalError(LOG_FILE, "herdr-tab-name", errorText(error)));
 	let sync: TabNameSync | undefined;
 	let cancelSecondLook: (() => void) | undefined;
+	// Made at the first TUI session start: by then every extension has loaded, pi-intercom too. One registration for the life of this extension.
+	let gate: IntercomNameGate | undefined;
 	const stop = () => {
 		cancelSecondLook?.();
 		cancelSecondLook = undefined;
+		gate?.cancel();
 		sync?.stop();
 		sync = undefined;
 	};
@@ -77,11 +81,17 @@ export default function herdrTabNameExtension(pi: ExtensionAPI, options: HerdrTa
 		stop();
 		// Print, JSON and RPC runs are not the program the tab shows.
 		if (ctx.mode !== "tui") return;
+		gate ??= intercomNameGate(pi.events, { later, onError });
+		const nameGate = gate;
 		const self = { sessionFile: ctx.sessionManager.getSessionFile(), sessionId: ctx.sessionManager.getSessionId(), paneId: env.HERDR_PANE_ID };
 		sync = tabNameSync({
 			self: () => self,
 			name: () => pi.getSessionName(),
-			setName: (name) => pi.setSessionName(name),
+			setName: (name) => {
+				const before = pi.getSessionName();
+				// A /name given while this waits wins over the tab's label.
+				nameGate.run(() => { if (pi.getSessionName() === before) pi.setSessionName(name); });
+			},
 			snapshot: async () => answer(await run(["api", "snapshot"])),
 			// The label is one argument, and Herdr takes it as written, a leading dash too.
 			renameTab: async (tabId, label) => { answer(await run(["tab", "rename", tabId, label])); },

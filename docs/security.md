@@ -1009,6 +1009,10 @@ over the network. Its only file is `herdr-tab-name.log` in the agent
 directory, written when a `herdr` call or the session rename fails, or when
 it stops a run of changes that cause each other. A line for a failed `herdr`
 call names the subcommand and the exit code, not the label.
+When pi-intercom is loaded, Herdr Tab Name registers the namespace
+`pi-extras/herdr-tab-name` on pi-intercom's extension channel, in the same
+process. It cannot own the channel, and it sends and stores nothing there: it
+only reads whether the broker connection is up, to time the session rename.
 `PI_HERDR_TAB_NAME=off` turns it off.
 
 ## Loop Stall
