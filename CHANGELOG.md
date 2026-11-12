@@ -2,6 +2,20 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.44.1 - 2026-11-12
+
+### Fixed
+
+- Herdr Tab Name: a session that takes its tab's label while pi-intercom
+  connects no longer stays listed in pi-intercom as `subagent-chat-<id>`.
+  pi-intercom 0.18.1 loses a rename that comes between its broker
+  registration and the broker's answer, and does not send it again until the
+  next turn. With pi-intercom loaded, Herdr Tab Name now waits for that
+  answer before it renames the session. A `/name` given in that time wins
+  over the tab's label. When pi-intercom does not connect in 10 seconds
+  (turned off, or no broker), the rename runs then, and later renames do not
+  wait until it connects.
+
 ## 0.44.0 - 2026-11-11
 
 ### Added
