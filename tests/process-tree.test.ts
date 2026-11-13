@@ -94,6 +94,21 @@ for (const { mode, skip } of modes) {
 			} finally { killMarked(value); }
 		});
 
+		test("d2. an abort while the shell starts", { timeout: 15_000 }, async () => {
+			const value = marker();
+			const controller = new AbortController();
+			try {
+				const started = Date.now();
+				const call = run(mode, `sh -c 'trap "" TERM; sleep ${value}'`, 30, controller.signal);
+				controller.abort();
+				const result = await call;
+				assert.equal(result.error, true);
+				assert.match(result.text, /aborted/);
+				assert.ok(Date.now() - started < 10_000, "the abort ended the call");
+				assert.deepEqual(await survivors(value), []);
+			} finally { killMarked(value); }
+		});
+
 		test("output and exit code pass through unchanged", { timeout: 15_000 }, async () => {
 			const ok = await run(mode, "printf 'one\\ntwo\\n'; echo err >&2");
 			assert.equal(ok.error, false);

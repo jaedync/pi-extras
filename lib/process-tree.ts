@@ -15,7 +15,7 @@
  * descendants seen by a scan each second while the call ran. That fallback
  * misses a process that left the session and lost its parent between scans.
  */
-import { spawn, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { constants as osConstants } from "node:os";
@@ -41,6 +41,7 @@ export const TREE_GRACE_MS = 3000;
 /** How long the kill waits for SIGKILLed processes to go. */
 const KILL_WAIT_MS = 2000;
 const POLL_MS = 25;
+const PS_POLL_MS = 200;
 const SCAN_MS = 1000;
 const CGROUP_ROOT = "/sys/fs/cgroup";
 
@@ -175,24 +176,32 @@ export function reapScope(dir: string, now = false): void {
 interface Proc { readonly pid: number; readonly ppid: number; readonly pgid: number; readonly sid: number | null; readonly start: string }
 
 /** Every process: from /proc on Linux, from ps elsewhere. */
-function processes(): Proc[] {
-	if (process.platform === "linux") {
-		const found: Proc[] = [];
-		for (const name of readdirSync("/proc")) {
-			if (!/^\d+$/.test(name)) continue;
-			// Undefined when it ended while it was read.
-			const stat = readIfThere(`/proc/${name}/stat`);
-			if (stat === undefined) continue;
-			const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-			// After the name: state ppid pgrp session ... starttime is field 22, the 20th here.
-			if (fields[0] === "Z" || fields[0] === "X") continue;
-			found.push({ pid: Number(name), ppid: Number(fields[1]), pgid: Number(fields[2]), sid: Number(fields[3]), start: fields[19] ?? "" });
-		}
-		return found;
+async function processes(): Promise<Proc[]> {
+	return process.platform === "linux" ? procProcesses() : psProcesses();
+}
+
+/** Every process, from /proc; synchronous, for an exit handler too. */
+function procProcesses(): Proc[] {
+	const found: Proc[] = [];
+	for (const name of readdirSync("/proc")) {
+		if (!/^\d+$/.test(name)) continue;
+		// Undefined when it ended while it was read.
+		const stat = readIfThere(`/proc/${name}/stat`);
+		if (stat === undefined) continue;
+		const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+		// After the name: state ppid pgrp session ... starttime is field 22, the 20th here.
+		if (fields[0] === "Z" || fields[0] === "X") continue;
+		found.push({ pid: Number(name), ppid: Number(fields[1]), pgid: Number(fields[2]), sid: Number(fields[3]), start: fields[19] ?? "" });
 	}
-	const ps = spawnSync("ps", ["-A", "-o", "pid=,ppid=,pgid=,stat=,lstart="], { encoding: "utf8", timeout: 5000 });
-	if (ps.status !== 0) return [];
-	return ps.stdout.split("\n").flatMap((line) => {
+	return found;
+}
+
+/** Every process, from ps: macOS has no /proc. No ps, or a failed one, gives none, and the group kill still runs. */
+async function psProcesses(): Promise<Proc[]> {
+	const stdout = await new Promise<string>((resolve) => {
+		execFile("ps", ["-A", "-o", "pid=,ppid=,pgid=,stat=,lstart="], { encoding: "utf8", timeout: 5000 }, (error, out) => resolve(error ? "" : out));
+	});
+	return stdout.split("\n").flatMap((line) => {
 		const parts = line.trim().split(/\s+/);
 		const [pid, ppid, pgid, state, ...start] = parts;
 		if (start.length === 0 || state === undefined || state.startsWith("Z")) return [];
@@ -205,8 +214,7 @@ function processes(): Proc[] {
  * shell leads both, as Node's `detached` starts it), the descendants of these
  * by parent, and the ones `known` holds that still have the same start time.
  */
-function treeOf(root: number, known: Map<number, string>): Proc[] {
-	const all = processes();
+function treeOf(root: number, known: Map<number, string>, all: readonly Proc[]): Proc[] {
 	const byParent = new Map<number, Proc[]>();
 	for (const proc of all) byParent.set(proc.ppid, [...(byParent.get(proc.ppid) ?? []), proc]);
 	const members = new Map<number, Proc>();
@@ -247,33 +255,42 @@ export class Tree {
 		liveTrees.add(this);
 		installExitNet();
 		if (!scope) {
-			this.scanTimer = setInterval(() => this.scan(), SCAN_MS);
+			this.scanTimer = setInterval(() => this.tick(), SCAN_MS);
 			this.scanTimer.unref?.();
 		}
 	}
 
-	private scan(): Proc[] {
-		const members = treeOf(this.root, this.known);
+	private scanning = false;
+
+	private async scan(): Promise<Proc[]> {
+		const members = treeOf(this.root, this.known, await processes());
 		for (const proc of members) this.known.set(proc.pid, proc.start);
 		return members;
 	}
 
+	/** One scan at a time from the timer; a slow ps must not pile up. */
+	private tick(): void {
+		if (this.scanning) return;
+		this.scanning = true;
+		this.scan().finally(() => { this.scanning = false; }).catch((error: unknown) => process.emitWarning(`process-tree: a scan failed: ${String(error)}`));
+	}
+
 	/** The pids of the tree that are alive now. */
-	members(): number[] {
+	async members(): Promise<number[]> {
 		if (this.scope) {
 			const inScope = scopeMembers(this.scope);
 			// Before systemd-run moves the shell into its scope, the group holds it.
 			return inScope.length > 0 ? inScope : this.groupMembers();
 		}
-		return this.scan().map((proc) => proc.pid);
+		return (await this.scan()).map((proc) => proc.pid);
 	}
 
 	private groupMembers(): number[] {
 		return signal(-this.root, 0) ? [-this.root] : [];
 	}
 
-	private send(name: NodeJS.Signals): void {
-		for (const pid of this.members()) signal(pid, name);
+	private async send(name: NodeJS.Signals): Promise<void> {
+		for (const pid of await this.members()) signal(pid, name);
 		// The group too: a process can be in it before it is in the scope.
 		signal(-this.root, name);
 	}
@@ -281,20 +298,21 @@ export class Tree {
 	private async drained(ms: number): Promise<boolean> {
 		const deadline = Date.now() + ms;
 		for (;;) {
-			if (this.members().length === 0) return true;
+			if ((await this.members()).length === 0) return true;
 			if (Date.now() >= deadline) return false;
-			await sleep(POLL_MS);
+			// ps costs more than a read of /proc or of a cgroup.
+			await sleep(this.scope || process.platform === "linux" ? POLL_MS : PS_POLL_MS);
 		}
 	}
 
 	/** SIGTERM, a grace, then SIGKILL. True when no process of the tree is left. */
 	async end(graceMs: number): Promise<boolean> {
 		try {
-			if (this.members().length === 0) return true;
-			this.send("SIGTERM");
+			if ((await this.members()).length === 0) return true;
+			await this.send("SIGTERM");
 			if (await this.drained(graceMs)) return true;
 			if (this.scope) killScopeNow(this.scope);
-			this.send("SIGKILL");
+			await this.send("SIGKILL");
 			return await this.drained(KILL_WAIT_MS);
 		} finally {
 			if (this.scope) reapScope(this.scope);
@@ -305,7 +323,8 @@ export class Tree {
 	/** SIGKILL all at once, for the exit of this process. */
 	killNow(): void {
 		if (this.scope) { killScopeNow(this.scope); reapScope(this.scope, true); }
-		else for (const pid of this.members()) signal(pid, "SIGKILL");
+		// /proc tells a known pid from a later process with the same number; ps at exit would be too slow, so macOS has the group only.
+		else if (process.platform === "linux") for (const proc of treeOf(this.root, this.known, procProcesses())) signal(proc.pid, "SIGKILL");
 		signal(-this.root, "SIGKILL");
 	}
 
@@ -346,10 +365,13 @@ export function treeShellOperations(resolveShell: () => ShellConfig, options: Tr
 				child.stdin?.on("error", () => { /* The shell may exit before it reads all. */ });
 				child.stdin?.end(command);
 			}
+			let failure: Error | undefined;
 			const spawned = new Promise<void>((resolve, reject) => {
 				child.once("spawn", resolve);
 				child.once("error", reject);
 			});
+			// A later error (a signal Node could not send) must not end Pi; the call reports it if it has no exit code.
+			child.on("error", (error) => { failure ??= error; });
 			const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
 				child.once("exit", (code, name) => resolve({ code, signal: name }));
 			});
@@ -366,6 +388,8 @@ export function treeShellOperations(resolveShell: () => ShellConfig, options: Tr
 			const onAbort = () => end("aborted");
 			const timer = timeout === undefined ? undefined : setTimeout(() => end("timeout"), timeout * 1000);
 			abort?.addEventListener("abort", onAbort, { once: true });
+			// An abort while the shell started fired before the listener was there.
+			if (abort?.aborted) onAbort();
 			try {
 				const first = await Promise.race([exited.then((result) => ({ result })), stopped.then(() => undefined)]);
 				// The shell ended or the call must stop: either way, nothing of it stays.
@@ -377,6 +401,7 @@ export function treeShellOperations(resolveShell: () => ShellConfig, options: Tr
 				child.stderr?.destroy();
 				if (reason === "aborted" || abort?.aborted) throw new Error("aborted");
 				if (reason === "timeout") throw new Error(`timeout:${timeout}`);
+				if (result.code === null && result.signal === null && failure) throw failure;
 				return { exitCode: result.code ?? (result.signal ? 128 + (osConstants.signals[result.signal] ?? 0) : 1) };
 			} finally {
 				if (timer) clearTimeout(timer);
