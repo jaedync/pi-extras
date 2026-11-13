@@ -11,6 +11,11 @@ import { MAIN } from "./names.ts";
  * with a note, instead of losing its end silently.
  */
 export const DESCRIPTION_MAX_CHARS = 4_096;
+/**
+ * With `codemode` active, Pi appends a line to each declared tool's description
+ * ("Codemode: `tools.subagent(args)` resolves to a string.", 57 characters), after this text.
+ */
+export const PI_SUFFIX_RESERVE = 100;
 const GUIDE_HEADING = "The user's notes on which model suits which work:";
 const GUIDE_CUT_NOTE = "\n(notes cut to fit; read the guide file for the rest)";
 
@@ -45,7 +50,7 @@ export function subagentDescription(options: { models: string; defaultModel: str
 	const head = lines.join("\n");
 	const guide = options.guide.trim();
 	if (!guide) return head;
-	const room = DESCRIPTION_MAX_CHARS - head.length - GUIDE_HEADING.length - 3;
+	const room = DESCRIPTION_MAX_CHARS - PI_SUFFIX_RESERVE - head.length - GUIDE_HEADING.length - 3;
 	return room <= GUIDE_CUT_NOTE.length ? head : `${head}\n\n${GUIDE_HEADING}\n${fitGuide(guide, room)}`;
 }
 

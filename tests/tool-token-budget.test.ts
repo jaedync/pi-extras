@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { registerLinkTool } from "../lib/link-context/index.ts";
-import { DESCRIPTION_MAX_CHARS, subagentDescription } from "../lib/subagents/describe.ts";
+import { DESCRIPTION_MAX_CHARS, PI_SUFFIX_RESERVE, subagentDescription } from "../lib/subagents/describe.ts";
 import { subagentParams } from "../lib/subagents/tools.ts";
 
 const CHARS_PER_TOKEN = 2.75;
@@ -38,7 +38,9 @@ test("the subagent description never passes Claude Code's 4,096-character cut, a
 	for (const length of [0, 500, 1_500, 2_500, 4_000, 9_000]) {
 		const guide = ["- Never use model-x.", ...Array.from({ length: Math.ceil(length / 60) }, (_, i) => `- note ${i} about which model suits which work, one line.`)].join("\n");
 		const description = subagentDescription({ models, defaultModel: "anthropic/claude-opus-5-5", guide, forChild: false });
-		assert.ok(description.length <= DESCRIPTION_MAX_CHARS, `${description.length} characters with a ${length}-character guide`);
+		const sent = `${description}\n\nCodemode: \`tools.subagent(args)\` resolves to a string.`;
+		assert.ok(sent.length <= DESCRIPTION_MAX_CHARS, `${sent.length} characters with a ${length}-character guide and Pi's codemode line`);
+		assert.ok(description.length <= DESCRIPTION_MAX_CHARS - PI_SUFFIX_RESERVE);
 		assert.match(description, /- Never use model-x\./, "the guide's first line, where the bans go, survives");
 	}
 });
