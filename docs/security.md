@@ -1031,10 +1031,11 @@ the time, numbers and the labels of slow synchronous operations, such as
 ## Defer Tools
 
 Defer Tools is off until `deferTools.names` lists tools. It sends nothing by
-itself and writes no files. It reads the
-`deferTools` section of `pi-extras.json` and `PI_EXTRAS_DEFER_TOOLS` once per
-session. In a request to Meridian it adds `defer_loading: true` to the listed
-tool declarations. It changes nothing else in the request, and it leaves
+itself and writes no files of its own. It reads the `deferTools` section of
+`pi-extras.json` and `PI_EXTRAS_DEFER_TOOLS` once per new session. It writes
+the list (tool names and base URLs only) into the session as a
+`defer-tools/frozen` entry. In a request to Meridian it adds
+`defer_loading: true` to the listed tool declarations. It changes nothing else in the request, and it leaves
 requests to other providers as they are.
 
 ## Reporting

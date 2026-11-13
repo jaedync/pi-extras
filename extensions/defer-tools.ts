@@ -5,7 +5,8 @@
  * Off until names are given: see RECOMMENDED_DEFER_TOOLS for why.
  *
  * A changed tool list rewrites the whole prompt cache, so each session freezes the list at its
- * start: a later edit of pi-extras.json, or a `/reload`, reaches only new sessions. The output
+ * start and keeps it in a session entry (FROZEN_ENTRY). A resume, fork or `/reload` reads that
+ * entry, not pi-extras.json; a session that had turns before it had an entry never defers. The output
  * depends only on the payload and that list, so a warm request repeats the real one byte for byte.
  * Load it before Cache Compaction: that extension keeps the payload it sees to replay as a warm.
  *
@@ -32,6 +33,8 @@ const MERIDIAN_HEADER = "x-meridian-agent";
 const VIRTUAL_API = "pi-virtual";
 const KILL_SWITCH = "PI_EXTRAS_DEFER_TOOLS";
 const STORE_SLOT = Symbol.for("pi-extras.defer-tools.sessions");
+/** The session entry that holds a session's frozen config. */
+export const FROZEN_ENTRY = "defer-tools/frozen";
 
 export interface DeferConfig {
 	readonly names: readonly string[];
@@ -150,7 +153,27 @@ export interface DeferToolsOptions {
 }
 
 interface SessionContext extends RequestContext {
-	readonly sessionManager?: { getSessionId?: () => string };
+	readonly sessionManager?: { getSessionId?: () => string; getBranch?: () => readonly unknown[] };
+}
+
+type BranchEntry = { type?: unknown; customType?: unknown; data?: unknown; message?: { role?: unknown } } | null;
+
+/**
+ * What the session's branch says: its frozen config (the latest entry on the path, so a fork or a
+ * tree branch keeps its source's), "turns" when it had a provider turn with no entry, or undefined
+ * for a session that has not talked to a model yet.
+ */
+export function branchState(branch: readonly unknown[]): { readonly frozen: Record<string, unknown> } | "turns" | undefined {
+	let turns = false;
+	for (let i = branch.length - 1; i >= 0; i--) {
+		const entry = branch[i] as BranchEntry;
+		if (entry?.type === "custom" && entry.customType === FROZEN_ENTRY) {
+			const data = entry.data && typeof entry.data === "object" ? entry.data as Record<string, unknown> : {};
+			return { frozen: data };
+		}
+		if (entry?.type === "message" && entry.message?.role === "assistant") turns = true;
+	}
+	return turns ? "turns" : undefined;
 }
 
 export default function deferTools(pi: ExtensionAPI, options: DeferToolsOptions = {}): void {
@@ -158,11 +181,21 @@ export default function deferTools(pi: ExtensionAPI, options: DeferToolsOptions 
 	// The kill switch is the process's own; no earlier copy in it can have run with deferral.
 	if (env[KILL_SWITCH]?.trim() === "0") return;
 	const store = options.store ?? processStore();
-	// Read once per session, at its start (or its first request), and never again for it.
+	// Decided once per session, at its start (or its first request), and never again for it.
 	const frozenFor = (ctx: SessionContext): DeferConfig => {
 		const id = ctx.sessionManager?.getSessionId?.() ?? "";
-		let config = store.get(id);
-		if (!config) { config = freezeDeferConfig(options.config ?? readSection("deferTools"), env); store.set(id, config); }
+		const known = store.get(id);
+		if (known) return known;
+		const state = branchState(ctx.sessionManager?.getBranch?.() ?? []);
+		let config: DeferConfig;
+		if (state === "turns") config = freezeDeferConfig({ names: [] }, env);
+		else if (state) config = freezeDeferConfig(state.frozen, env);
+		else {
+			config = freezeDeferConfig(options.config ?? readSection("deferTools"), env);
+			// Off writes nothing: a later resume finds turns and no entry, so it stays off.
+			if (config.names.length > 0) pi.appendEntry(FROZEN_ENTRY, { names: [...config.names], meridianBaseUrls: [...config.meridianBaseUrls] });
+		}
+		store.set(id, config);
 		return config;
 	};
 	// Pi assembles a request's headers before its payload, so the first request already counts.

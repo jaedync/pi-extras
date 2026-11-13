@@ -13,8 +13,10 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   tools. Turn it on only with a Meridian build that keeps its single-turn
   limit for sessions with deferred tools: Meridian 1.89.0 removes the limit,
   and each turn with a tool call then costs one more hidden model turn. Each
-  session keeps the list of its start, so a config edit never rewrites the
-  prompt cache of a running session. `PI_EXTRAS_DEFER_TOOLS=0` turns it off.
+  session keeps the list of its start in a session entry, also after a
+  resume, fork or `/reload`, so a config edit never rewrites the prompt
+  cache of a session. A session that had turns before it had a list never
+  starts to defer. `PI_EXTRAS_DEFER_TOOLS=0` turns it off.
   Requests to other providers do not change.
 
 ## 0.44.2 - 2026-11-13

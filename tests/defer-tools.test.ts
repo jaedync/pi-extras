@@ -9,6 +9,7 @@ import deferTools, {
 	isMeridianModel,
 	parseDeferConfig,
 	requestGoesToMeridian,
+	FROZEN_ENTRY,
 } from "../extensions/defer-tools.ts";
 
 const tool = (name: string, extra: Record<string, unknown> = {}) => ({ name, description: `${name} tool`, input_schema: { type: "object", properties: {}, required: [] }, ...extra });
@@ -142,8 +143,14 @@ test("a virtual selection defers only when every registry model with the payload
 type Handler = (event: { type: string; payload: unknown }, ctx: unknown) => unknown;
 function fakePi() {
 	const handlers = new Map<string, Handler[]>();
+	const appended: Array<{ customType: string; data: unknown }> = [];
 	return {
 		handlers,
+		appended,
+		appendEntry(customType: string, data: unknown) { appended.push({ customType, data: structuredClone(data) }); },
+		start(ctx: unknown) {
+			for (const handler of handlers.get("session_start") ?? []) handler({ type: "session_start" } as never, ctx);
+		},
 		on(name: string, handler: Handler) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
 		headers(headers: Record<string, string>, ctx: unknown) {
 			for (const handler of handlers.get("before_provider_headers") ?? []) handler({ type: "before_provider_headers", headers } as never, ctx);
@@ -154,7 +161,10 @@ function fakePi() {
 		},
 	};
 }
-const ctxFor = (model: unknown, sessionId = "s1") => ({ model, sessionManager: { getSessionId: () => sessionId } });
+const ctxFor = (model: unknown, sessionId = "s1", branch: unknown[] = []) => ({ model, sessionManager: { getSessionId: () => sessionId, getBranch: () => branch } });
+const userEntry = { type: "message", id: "u1", message: { role: "user", content: "hi" } };
+const assistantEntry = { type: "message", id: "a1", message: { role: "assistant", content: [], provider: "anthropic", model: "claude-opus-5-5" } };
+const frozenEntry = (names: string[]) => ({ type: "custom", id: "f1", customType: FROZEN_ENTRY, data: { names, meridianBaseUrls: [...DEFAULT_MERIDIAN_BASE_URLS] } });
 
 test("the registered handler defers the configured tools for Meridian and leaves other providers alone", () => {
 	const pi = fakePi();
@@ -220,4 +230,84 @@ test("the x-meridian-agent request header marks a model as Meridian from its fir
 	assert.equal(pi.emit(input, ctxFor(direct))[0], undefined);
 	assert.equal(requestGoesToMeridian({ model: gateway }, { model: "claude-opus-5-5" }, DEFAULT_MERIDIAN_BASE_URLS, new Set(["gateway/claude-opus-5-5"])), true);
 	assert.equal(requestGoesToMeridian({ model: { ...gateway, api: "openai-completions" } }, { model: "claude-opus-5-5" }, DEFAULT_MERIDIAN_BASE_URLS, new Set(["gateway/claude-opus-5-5"])), false);
+});
+
+test("a new session reads pi-extras.json and writes its list into the session once", () => {
+	const pi = fakePi();
+	deferTools(pi as never, { config: { names: ["gov_search"] }, env: {}, store: new Map() });
+	const ctx = ctxFor(meridian, "new1");
+	pi.start(ctx);
+	const input = payload(tool("read"), tool("gov_search"));
+	assert.deepEqual(deferredNames(pi.emit(input, ctx)[0]), ["gov_search"]);
+	pi.emit(input, ctx);
+	pi.start(ctx);
+	assert.deepEqual(pi.appended, [{ customType: FROZEN_ENTRY, data: { names: ["gov_search"], meridianBaseUrls: [...DEFAULT_MERIDIAN_BASE_URLS] } }]);
+});
+
+test("a session with deferral off writes no entry", () => {
+	const pi = fakePi();
+	deferTools(pi as never, { config: {}, env: {}, store: new Map() });
+	const ctx = ctxFor(meridian, "off1");
+	pi.start(ctx);
+	assert.equal(pi.emit(payload(tool("read"), tool("gov_search")), ctx)[0], undefined);
+	assert.deepEqual(pi.appended, []);
+});
+
+test("a resumed session with an entry keeps its list, whatever pi-extras.json says now", () => {
+	const pi = fakePi();
+	deferTools(pi as never, { config: { names: ["list_peers"] }, env: {}, store: new Map() });
+	const ctx = ctxFor(meridian, "old1", [frozenEntry(["gov_search"]), userEntry, assistantEntry]);
+	pi.start(ctx);
+	const input = payload(tool("read"), tool("gov_search"), tool("list_peers"));
+	assert.deepEqual(deferredNames(pi.emit(input, ctx)[0]), ["gov_search"]);
+	assert.deepEqual(pi.appended, []);
+});
+
+test("a resumed session with an empty entry stays off when pi-extras.json now lists tools", () => {
+	const pi = fakePi();
+	deferTools(pi as never, { config: { names: ["gov_search"] }, env: {}, store: new Map() });
+	const ctx = ctxFor(meridian, "old2", [frozenEntry([]), userEntry, assistantEntry]);
+	pi.start(ctx);
+	assert.equal(pi.emit(payload(tool("read"), tool("gov_search")), ctx)[0], undefined);
+});
+
+test("a session with earlier assistant turns and no entry never starts to defer", () => {
+	const pi = fakePi();
+	deferTools(pi as never, { config: { names: ["gov_search"] }, env: {}, store: new Map() });
+	const ctx = ctxFor(meridian, "old3", [userEntry, assistantEntry]);
+	pi.start(ctx);
+	assert.equal(pi.emit(payload(tool("read"), tool("gov_search")), ctx)[0], undefined);
+	assert.deepEqual(pi.appended, []);
+});
+
+test("a fork keeps the entry of its source: the entry is on the branch it copies", () => {
+	const pi = fakePi();
+	deferTools(pi as never, { config: { names: [] }, env: {}, store: new Map() });
+	const ctx = ctxFor(meridian, "fork1", [frozenEntry(["gov_search"]), userEntry, assistantEntry, userEntry]);
+	pi.start(ctx);
+	assert.deepEqual(deferredNames(pi.emit(payload(tool("read"), tool("gov_search")), ctx)[0]), ["gov_search"]);
+	assert.deepEqual(pi.appended, []);
+});
+
+test("a /reload copy finds the session's entry, with no process record", () => {
+	const first = fakePi();
+	deferTools(first as never, { config: { names: ["gov_search"] }, env: {}, store: new Map() });
+	const branch: unknown[] = [];
+	const ctx = ctxFor(meridian, "rel1", branch);
+	first.start(ctx);
+	branch.push({ type: "custom", id: "f1", customType: first.appended[0].customType, data: first.appended[0].data }, userEntry, assistantEntry);
+	const reloaded = fakePi();
+	deferTools(reloaded as never, { config: { names: ["list_peers"] }, env: {}, store: new Map() });
+	reloaded.start(ctx);
+	assert.deepEqual(deferredNames(reloaded.emit(payload(tool("read"), tool("gov_search"), tool("list_peers")), ctx)[0]), ["gov_search"]);
+	assert.deepEqual(reloaded.appended, []);
+});
+
+test("an entry with bad data freezes to what parses, never to pi-extras.json", () => {
+	const pi = fakePi();
+	deferTools(pi as never, { config: { names: ["list_peers"] }, env: {}, store: new Map() });
+	const bad = { type: "custom", id: "f1", customType: FROZEN_ENTRY, data: { names: "gov_search" } };
+	const ctx = ctxFor(meridian, "bad1", [bad, userEntry, assistantEntry]);
+	pi.start(ctx);
+	assert.equal(pi.emit(payload(tool("read"), tool("list_peers")), ctx)[0], undefined);
 });

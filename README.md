@@ -1877,9 +1877,17 @@ tools. This is the recommended list (tools used in under 5% of sessions):
 - `PI_EXTRAS_DEFER_TOOLS=0` turns it off for the run.
 
 A change to the tool list rewrites the whole prompt cache. So each session
-keeps the list that it had at its start. A config edit, or a `/reload`,
-applies only to new sessions. The same request always gives the same bytes,
-so a cache warm repeats the real request.
+keeps the list that it had at its start, for its whole life:
+
+- A new session reads `pi-extras.json` and writes its list into the session
+  as a `defer-tools/frozen` entry.
+- A resumed, forked or reloaded session uses the list in that entry and does
+  not read `pi-extras.json`.
+- A session that had model turns before it had an entry defers nothing, so
+  deferral never starts in the middle of a session.
+
+A config edit thus applies only to new sessions. The same request always
+gives the same bytes, so a cache warm repeats the real request.
 
 Some tools are never deferred: `read`, `bash`, `edit`, `write`, `codemode` and
 `powershell`. A tool that already has a `defer_loading` value keeps it. A
