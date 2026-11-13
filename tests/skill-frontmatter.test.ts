@@ -22,6 +22,19 @@ test("every skill folder has a SKILL.md that Pi loads with its folder name and a
 	}
 });
 
+// Every session's prompt carries each skill's description, so a long one costs tokens on every request of every
+// session. The body holds the detail; the description only has to make the model load the skill.
+const DESCRIPTION_BUDGET = 560;
+
+test("every skill description stays within its prompt budget and names its /skill: command", () => {
+	for (const name of skillDirs) {
+		const { skills } = loadSkillsFromDir({ dir: join(SKILLS, name), source: "test" });
+		const description = skills[0].description;
+		assert.ok(description.length <= DESCRIPTION_BUDGET, `${name}: ${description.length} characters; budget ${DESCRIPTION_BUDGET}`);
+		assert.ok(description.includes(`/skill:${name}`), `${name} names /skill:${name}`);
+	}
+});
+
 test("a description with a plain colon and space is a diagnostic, so the check above can fail", () => {
 	const dir = mkdtempSync(join(tmpdir(), "skill-frontmatter-"));
 	try {

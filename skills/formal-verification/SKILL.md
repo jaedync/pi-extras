@@ -1,6 +1,6 @@
 ---
 name: formal-verification
-description: Formally verify the part of a codebase where a bug costs the most and example tests reach the least (races, retries, cursors, locks, at-most-once delivery, reload and restart hand-over, protocol or state-machine logic). It writes a Quint model of the design with each action cited to code, checks every order of events within stated bounds with TLC, shows each property fail on a mutant that copies a code change, replays model traces against the real code in a conformance test, and leaves a record (fv.json) that one command reruns. Installs its free tools at user scope. Use when the user asks to formally verify, model-check, prove an invariant, find race or interleaving bugs, check a state machine exhaustively, or runs /skill:formal-verification [area].
+description: Formally verify the riskiest logic of a codebase (races, retries, cursors, locks, at-most-once delivery, reload and restart hand-over, protocol or state-machine logic) with a Quint model cited to code, TLC checks of every event order, mutants and a conformance test against the real code. Use when the user asks to formally verify, model-check, prove an invariant, find race or interleaving bugs, check a state machine exhaustively, or runs /skill:formal-verification [area].
 ---
 
 <!-- Adapts the goals of Lauren Tan's pstack skills create-formal-verification-skill

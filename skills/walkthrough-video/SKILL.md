@@ -1,6 +1,6 @@
 ---
 name: walkthrough-video
-description: Direct a short launch film or product walkthrough video of a web app, the way Apple, Linear or Figma make theirs. You write the film as code (a typed storyboard and scene modules on the product's own look), with instruments for frame-exact capture of the real app, brand lift, a sound mix, defect checks and measures against 12 reference films, and a critique by a fresh reviewer. A quick mode composes a plain screen walkthrough with captions and a voiceover. Use when the user asks for a launch film, product film, demo, walkthrough, screencast, feature video, README GIF or tutorial clip of a web app or site.
+description: Direct a short launch film or product walkthrough video of a web app, the way Apple, Linear or Figma make theirs, written as code on the product's own look with frame-exact capture, sound, defect checks and a fresh critique; a quick mode makes a plain captioned walkthrough with a voiceover. Use when the user asks for a launch film, product film, demo, walkthrough, screencast, feature video, README GIF or tutorial clip of a web app or site, or runs /skill:walkthrough-video.
 ---
 
 # Launch films of web apps

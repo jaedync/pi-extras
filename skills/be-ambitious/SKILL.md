@@ -1,6 +1,6 @@
 ---
 name: be-ambitious
-description: Turn a task into the deeper version a field-leading expert would do, then do it with their raw material, their instruments and a check from outside the model. Covers depth (expert methods), altitude (the goal behind the task) and range (methods from other fields). Use when the user asks to be more ambitious, go deeper, aim higher, think bigger or do it properly, when an open analysis, research, design, investigation or quality task is likely to get a shallow answer, or when the user runs /skill:be-ambitious. Not for small, fully specified edits.
+description: Do the deeper version of a task that a field-leading expert would do (depth, altitude and range), with their raw material, their instruments and a check from outside the model. Use when the user asks to be more ambitious, go deeper, aim higher, think bigger or do it properly, when an open analysis, research, design, investigation or quality task is likely to get a shallow answer, or when the user runs /skill:be-ambitious; not for small, fully specified edits.
 ---
 
 <!-- Based on Felix Rieseberg, "How to be more ambitious: A tutorial for humans

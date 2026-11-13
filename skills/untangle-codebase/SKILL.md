@@ -1,6 +1,6 @@
 ---
 name: untangle-codebase
-description: Refactor a codebase or one area of it so that pieces that change together sit together and pieces that do not are not tied. Lists every hidden link, needless link, surplus piece and special case with file:line, redesigns from first principles, fixes in small tested commits on a branch, and measures the result (special-case count, import cycles, imports of volatile code, files that change together with no import). Optional passes remove comments that restate the code and tests that cannot catch a bug. Use when the user runs /skill:untangle-codebase or asks to untangle, de-tangle or restructure a codebase for agents.
+description: Refactor a codebase or one area of it so that pieces that change together sit together, with every hidden or needless link and special case listed at file:line, small tested commits and a measured result. Use when the user runs /skill:untangle-codebase or asks to untangle, de-tangle or restructure a codebase for agents.
 disable-model-invocation: true
 argument-hint: "[area or concern to focus on]"
 ---

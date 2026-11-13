@@ -1,6 +1,6 @@
 ---
 name: implicit-state-machines
-description: Find the implicit state machines in a codebase (state kept in loose booleans, mode enums, nullable fields or timestamps whose combinations imply phases, with transitions spread over many handlers), check each finding against the code, and sort them into clusters that need design thought, quick fixes, enum candidates and ones that are fine. Fans out read-only scout subagents over the source in batches, then one strong evaluating pass. Use when the user asks to find implicit state machines, hidden states, impossible states, state conflicts or mode flags in an app or library, or runs /skill:implicit-state-machines. It is read-only and changes no code.
+description: Find the implicit state machines in a codebase (loose booleans, mode enums, nullable fields or timestamps whose combinations imply phases), check each against the code and sort them into design work, quick fixes, enum candidates and ones that are fine; read-only, with scout subagents. Use when the user asks to find implicit state machines, hidden states, impossible states, state conflicts or mode flags in an app or library, or runs /skill:implicit-state-machines.
 ---
 
 <!-- Based on Steve Ruiz's prompt "find all of the implicit state machines in my app"
