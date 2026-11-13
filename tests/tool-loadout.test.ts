@@ -74,3 +74,8 @@ test("no note for typed input, for text that names no hidden tool, or when the t
 	assert.deepEqual(loadoutWithInput(["propose_goal_draft"])("Call propose_goal_draft."), { action: "continue" }, "without codemode nothing is hidden");
 	assert.deepEqual(loadoutWithInput(["codemode"])("Call propose_goal_draft."), { action: "continue" }, "an inactive tool cannot be called at all");
 });
+
+test("the note's example call uses the script identifier of a tool name with a dash", async () => {
+	const { codemodeNote } = await import("../extensions/tool-loadout.ts");
+	assert.match(codemodeNote(["web-search"]), /await tools\.web_search\(/);
+});

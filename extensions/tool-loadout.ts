@@ -56,8 +56,14 @@ export function namedHiddenTools(text: string, active: readonly string[], codemo
 		.map((found) => found.name);
 }
 
-export function codemodeNote(names: readonly string[]): string {
-	return `(Tool note: ${names.join(", ")} ${names.length === 1 ? "is" : "are"} not declared in this session. Call ${names.length === 1 ? "it" : "them"} from a codemode script, for example \`await tools.${names[0]}({ ... })\`, and read describeTool("${names[0]}") for the parameters and rules first.)`;
+/** The name a codemode script uses for a tool: characters invalid in an identifier become `_`. */
+function scriptName(name: string): string {
+	const id = name.replace(/[^A-Za-z0-9_$]/g, "_");
+	return /^[0-9]/.test(id) ? `_${id}` : id;
+}
+
+export function codemodeNote(names: readonly [string, ...string[]]): string {
+	return `(Tool note: ${names.join(", ")} ${names.length === 1 ? "is" : "are"} not declared in this session. Call ${names.length === 1 ? "it" : "them"} from a codemode script, for example \`await tools.${scriptName(names[0])}({ ... })\`, and read describeTool("${names[0]}") for the parameters and rules first.)`;
 }
 
 export interface ToolLoadoutOptions {
@@ -83,7 +89,7 @@ export default function toolLoadout(pi: ExtensionAPI, options: ToolLoadoutOption
 	// Only extension messages: a user's own words stay as typed.
 	pi.on("input", (event) => {
 		if (event.source !== "extension") return { action: "continue" };
-		const names = namedHiddenTools(event.text, pi.getActiveTools(), config.codemodeOnly);
-		return names.length === 0 ? { action: "continue" } : { action: "transform", text: `${event.text}\n\n${codemodeNote(names)}` };
+		const [first, ...rest] = namedHiddenTools(event.text, pi.getActiveTools(), config.codemodeOnly);
+		return first === undefined ? { action: "continue" } : { action: "transform", text: `${event.text}\n\n${codemodeNote([first, ...rest])}` };
 	});
 }
