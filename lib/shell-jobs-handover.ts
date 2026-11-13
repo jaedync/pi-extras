@@ -42,6 +42,8 @@ export interface HandoverJob {
 	readonly cleanupError: string | null;
 	readonly stoppedBackground: number | null;
 	readonly codeUnknown?: boolean;
+	/** The job's systemd scope folder (lib/process-tree.ts); absent or null for a job with none, or one an older version wrote. */
+	readonly scope?: string | null;
 }
 
 export interface Handover {
@@ -193,7 +195,8 @@ function parseJob(raw: unknown, logDir: string): HandoverJob | string {
 	const fields = isTextOrNull(job.title) && isText(job.command) && isText(job.cwd) && isTextOrNull(job.toolCallId) && isTextOrNull(job.pidStart) &&
 		isCount(job.startedAt) && isCode(job.code) && isTextOrNull(job.signal) && (job.endedAt === null || isCount(job.endedAt)) &&
 		isBool(job.claimed) && isCount(job.attempts) && isBool(job.delivered) && isBool(job.deliveryFailed) && isTextOrNull(job.cleanupError) &&
-		(job.stoppedBackground === null || isCount(job.stoppedBackground)) && (job.codeUnknown === undefined || isBool(job.codeUnknown));
+		(job.stoppedBackground === null || isCount(job.stoppedBackground)) && (job.codeUnknown === undefined || isBool(job.codeUnknown)) &&
+		(job.scope === undefined || isTextOrNull(job.scope));
 	if (!fields) return `${where}: a field is missing or wrong`;
 	return job as unknown as HandoverJob;
 }

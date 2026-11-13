@@ -9,7 +9,8 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, unlinkSync } from "node:fs";
-import { killScopeNow, readIfThere, reapScope, scopeMembers, scopeSlice, signal as signalPid } from "./process-tree.ts";
+import { basename, join } from "node:path";
+import { killScopeNow, reapScope, scopeMembers, scopeSlice, signal as signalPid } from "./process-tree.ts";
 import { mayStop } from "./shell-jobs-adopt.ts";
 import { TERM_GRACE_MS } from "./shell-jobs-core.ts";
 import type { JobsWidget } from "./shell-jobs-widget.ts";
@@ -254,23 +255,24 @@ export function rememberScope(pgid: number, dir: string): void {
 	scopes().set(pgid, dir);
 }
 
+/** Drop the record of a job's scope: its spawn failed, or the job no longer owns its group. */
+export function forgetScope(pgid: number): void {
+	registry().scopes?.delete(pgid);
+}
+
+/** Whether a folder is a shell-jobs scope of this user's slice: the only kind a hand-over may name. */
+export function isJobScope(dir: string): boolean {
+	const slice = scopeSlice();
+	return slice !== null && JOB_SCOPE.test(basename(dir)) && dir === join(slice, basename(dir));
+}
+
 /**
- * The scope of a job's group: the one recorded at its start, else the scope
- * its leader runs in now, when that is a shell-jobs scope. A job adopted at a
- * restart has no record, and its callers have checked that its leader is the
- * job's own process.
+ * The scope of a job's group: the one recorded at its start, or given by the
+ * hand-over that adopted it. Never one read from /proc: a pid that is not
+ * verified may now be another job's process.
  */
 export function scopeOf(pgid: number): string | undefined {
-	const known = scopes().get(pgid);
-	if (known !== undefined) return known;
-	const slice = scopeSlice();
-	if (slice === null) return undefined;
-	const line = readIfThere(`/proc/${pgid}/cgroup`)?.split("\n").find((text) => text.startsWith("0::"));
-	const path = line?.slice(3).trim() ?? "";
-	const name = path.slice(path.lastIndexOf("/") + 1);
-	if (!JOB_SCOPE.test(name) || `/sys/fs/cgroup${path}` !== `${slice}/${name}`) return undefined;
-	rememberScope(pgid, `${slice}/${name}`);
-	return `${slice}/${name}`;
+	return scopes().get(pgid);
 }
 
 /** Whether any process of the job is left: in its group, or in its scope. */

@@ -24,6 +24,7 @@ import { once } from "node:events";
 import { closeSync, existsSync, mkdtempSync, openSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Readable } from "node:stream";
 import { getAgentDir, getShellConfig, SettingsManager, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -61,13 +62,14 @@ import {
 	type Runtime,
 	scheduleResidualReaper,
 	sleep,
+	forgetScope,
 	rememberScope,
 	stopGroup,
 	takeReload,
 } from "../lib/shell-jobs-process.ts";
 import { acknowledgeCompletion, attachDelivery, COMPLETION_CUSTOM_TYPE, noteRunStart, reconcileDeliveries, settleDeliveries } from "../lib/shell-jobs-delivery.ts";
 import { jobEnv, type Launch, launchArgs, type SessionFacts, withExitFile } from "../lib/shell-jobs-launch.ts";
-import { newScope } from "../lib/process-tree.ts";
+import { forgetScopeProbe, newScope, scopeStarted } from "../lib/process-tree.ts";
 import { buildHandover, claimForSession, type Ending, firstLook, jobsFromHandover, mayStop, startIdentity, stopAdoptPoll, sweepHandovers, watchAdopted } from "../lib/shell-jobs-adopt.ts";
 import { type Handover, writeHandover } from "../lib/shell-jobs-handover.ts";
 import { restartPending } from "../lib/restart-intent.ts";
@@ -190,6 +192,7 @@ async function finalize(runtime: Runtime, id: string, code: number | null, signa
 	const touch = outcome.touchGroup !== false;
 	const left = touch && treeAlive(current.pid) ? await groupSize(current.pid) : 0;
 	const cleanup = touch ? await stopGroup(current.pid) : { cleaned: true, denied: false };
+	if (!touch) forgetScope(current.pid);
 	// Re-read after the await: an explicit kill may have claimed this job while
 	// the group was draining, and that claim must win over the earlier snapshot.
 	const latest = runtime.jobs.get(id) ?? current;
@@ -267,7 +270,17 @@ function trimRetained(runtime: Runtime): void {
 	}
 }
 
-type SpawnedJob = { readonly child: ReturnType<typeof spawn>; started(): void };
+/** How long a systemd-run that could not start a scope may take to exit. */
+const EXIT_WAIT_MS = 2000;
+
+type SpawnedJob = {
+	readonly child: ReturnType<typeof spawn>;
+	/** It runs in a systemd scope, if systemd-run starts it. */
+	readonly scoped: boolean;
+	/** True once the command runs; false when systemd-run ended before it (lib/process-tree.ts scopeStarted). */
+	readonly begun: Promise<boolean>;
+	started(): void;
+};
 
 /**
  * Spawn a job's shell in a process group of its own. A started child can still
@@ -275,17 +288,19 @@ type SpawnedJob = { readonly child: ReturnType<typeof spawn>; started(): void };
  * it, and that ends Pi, so a listener stays on and logs it. Until `started`, the
  * caller's wait for the spawn event reports the error instead.
  */
-function spawnJob(launch: Launch, cwd: string, fd: number, id: string): SpawnedJob {
+function spawnJob(launch: Launch, cwd: string, fd: number, id: string, inScope: boolean): SpawnedJob {
 	// In a systemd scope where one can start, so a kill also reaches a process that left the group (lib/process-tree.ts).
-	const scope = newScope("pi-job", [launch.shell, ...launch.args]);
+	const scope = inScope ? newScope("pi-job", [launch.shell, ...launch.args]) : undefined;
 	const [file = launch.shell, ...args] = scope?.argv ?? [launch.shell, ...launch.args];
-	const child = spawn(file, args, { cwd, env: launch.env, detached: true, stdio: ["ignore", fd, fd] });
+	const child = spawn(file, args, { cwd, env: launch.env, detached: true, stdio: scope ? ["ignore", fd, fd, "pipe"] : ["ignore", fd, fd] });
 	if (scope !== undefined && typeof child.pid === "number") rememberScope(child.pid, scope.dir);
 	let spawned = false;
 	child.on("error", (error) => {
 		if (spawned) logError(`job ${id} process error`, error);
 	});
-	return { child, started: () => { spawned = true; } };
+	const pipe = scope ? child.stdio[3] as Readable | null : undefined;
+	const begun = scope ? scopeStarted(pipe).finally(() => pipe?.destroy()) : Promise.resolve(true);
+	return { child, scoped: scope !== undefined, begun, started: () => { spawned = true; } };
 }
 
 async function startJob(
@@ -329,28 +344,63 @@ async function startJob(
 			return errResult(`Could not create the job log: ${(error as Error).message}`);
 		}
 		const shell = launch.shell;
-		let spawned: SpawnedJob;
-		try {
-			// The wrapper writes the exit code next to the log, so a Pi that takes the job over at a restart can read it.
-			spawned = spawnJob(withExitFile(launch, exitPath), cwd, fd, id);
-		} catch (error) {
-			discardLog(logPath, fd);
-			return errResult(`Could not spawn ${shell}: ${(error as Error).message}`);
+		// The wrapper writes the exit code next to the log, so a Pi that takes the job over at a restart can read it.
+		const jobLaunch = withExitFile(launch, exitPath);
+		let child: ReturnType<typeof spawn> | undefined;
+		let exitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | undefined;
+		// In a scope first. When systemd-run cannot start one, the job runs in its own group, as before scopes.
+		for (const inScope of [true, false]) {
+			let spawned: SpawnedJob;
+			try {
+				spawned = spawnJob(jobLaunch, cwd, fd, id, inScope);
+			} catch (error) {
+				discardLog(logPath, fd);
+				return errResult(`Could not spawn ${shell}: ${(error as Error).message}`);
+			}
+			const current = spawned.child;
+			if (typeof current.pid === "number") {
+				pendingPid = current.pid;
+				runtime.pendingPids.add(pendingPid);
+			}
+			const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+				current.once("exit", (code, signal) => resolve({ code, signal }));
+			});
+			let failure: Error | undefined;
+			try {
+				await once(current, "spawn");
+				spawned.started();
+			} catch (error) {
+				failure = error as Error;
+			}
+			if (failure === undefined && await spawned.begun) {
+				child = current;
+				exitPromise = exited;
+				break;
+			}
+			if (!spawned.scoped) {
+				discardLog(logPath, fd);
+				return errResult(`Could not start ${shell}: ${failure?.message ?? "it did not start"}`);
+			}
+			// systemd-run is missing or could not start the scope: nothing of the command ran.
+			if (failure === undefined) await Promise.race([exited, sleep(EXIT_WAIT_MS)]);
+			if (pendingPid !== null) {
+				runtime.pendingPids.delete(pendingPid);
+				forgetScope(pendingPid);
+				pendingPid = null;
+			}
+			forgetScopeProbe();
+			try {
+				// A new log without systemd-run's error.
+				closeSync(fd);
+				fd = openSync(logPath, "w", 0o600);
+			} catch (error) {
+				discardLog(logPath, null);
+				return errResult(`Could not create the job log: ${(error as Error).message}`);
+			}
 		}
-		const { child } = spawned;
-		if (typeof child.pid === "number") {
-			pendingPid = child.pid;
-			runtime.pendingPids.add(pendingPid);
-		}
-		const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-			child.once("exit", (code, signal) => resolve({ code, signal }));
-		});
-		try {
-			await once(child, "spawn");
-			spawned.started();
-		} catch (error) {
+		if (child === undefined || exitPromise === undefined) {
 			discardLog(logPath, fd);
-			return errResult(`Could not start ${shell}: ${(error as Error).message}`);
+			return errResult(`Could not start ${shell}.`);
 		}
 		closeSync(fd);
 		const pid = child.pid;

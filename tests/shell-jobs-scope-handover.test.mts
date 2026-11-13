@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { join } from "node:path";
-import { newScope, scopeSupported, scopeSlice } from "../lib/process-tree.ts";
+import { newScope, reapScope, scopeSupported, scopeSlice } from "../lib/process-tree.ts";
 import { registry, scopeOf, stopGroup, type Job } from "../lib/shell-jobs-process.ts";
 import { jobsFromHandover, toHandoverJob } from "../lib/shell-jobs-adopt.ts";
 import { type Handover, parseHandover } from "../lib/shell-jobs-handover.ts";
@@ -63,16 +63,23 @@ test("an adopted job's setsid child ends when the job's shell has ended", { skip
 
 test("a scope is not read from /proc for a pid that has no record", { skip: scope ? false : "no systemd user scope here", timeout: 20_000 }, async () => {
 	const value = marker();
+	let dir: string | undefined;
 	try {
 		const wrapped = newScope("pi-job", ["/bin/sh", "-c", `sleep ${value}`]);
 		assert.ok(wrapped);
+		dir = wrapped.dir;
 		const [file, ...args] = wrapped.argv;
 		const child = spawn(file!, args, { detached: true, stdio: ["ignore", "ignore", "ignore", "pipe"] });
 		await once(child, "spawn");
 		for (let waited = 0; waited < 3000 && marked(value).length === 0; waited += 25) await new Promise((resolve) => setTimeout(resolve, 25));
 		registry().scopes!.delete(child.pid!);
 		assert.equal(scopeOf(child.pid!), undefined);
-	} finally { killMarked(value); }
+	} finally {
+		killMarked(value);
+		await survivors(value);
+		// A scope killed from outside stays active and empty until it is stopped.
+		if (dir) reapScope(dir, true);
+	}
 });
 
 test("a hand-over scope that is not a shell-jobs scope under this user's slice is refused", () => {

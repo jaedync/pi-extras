@@ -11,7 +11,7 @@ import { readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { processStart } from "./auto-update/leases.ts";
 import { claimHandover, type Handover, handoverDir, HANDOVER_MAX_AGE_MS, type HandoverJob, handoverPath, ownLogDir, parseHandover, readExitCode } from "./shell-jobs-handover.ts";
-import { type Job, type Runtime, stopGroup } from "./shell-jobs-process.ts";
+import { isJobScope, type Job, rememberScope, type Runtime, scopeOf, stopGroup } from "./shell-jobs-process.ts";
 
 /** How often a process that is not this one's child is checked for its end. */
 export const ADOPTED_POLL_MS = 500;
@@ -161,6 +161,7 @@ export function toHandoverJob(job: Job): HandoverJob {
 		claimed: job.claimed, attempts: job.attempts, delivered: job.delivered, deliveryFailed: job.deliveryFailed,
 		cleanupError: done ? job.cleanupError : null, stoppedBackground: job.stoppedBackground ?? 0,
 		...(job.codeUnknown === true ? { codeUnknown: true } : {}),
+		scope: scopeOf(job.pid) ?? null,
 	};
 }
 
@@ -178,7 +179,9 @@ export function buildHandover(runtime: Runtime, logDir: string, session: { file:
  * reconcile looks for it in history and sends it only when it is not there.
  */
 export function jobsFromHandover(record: Handover, runtimeId: string, epoch: number): Job[] {
-	return record.jobs.map((saved) => {
+	return record.jobs.map(({ scope, ...saved }) => {
+		// Only a shell-jobs scope of this user's slice: a record must not point the kill at other processes.
+		if (typeof scope === "string" && isJobScope(scope)) rememberScope(saved.pid, scope);
 		const undelivered = saved.state === "done" && !saved.delivered && !saved.claimed;
 		return {
 			...saved,
@@ -236,6 +239,7 @@ export function claimForSession(agentDir: string, reason: unknown, session: { se
  */
 function stopUnclaimed(record: Handover, log: Log): Promise<unknown> {
 	const verified = record.jobs.filter((job) => job.state === "running" && typeof job.pidStart === "string" && job.pid > 1 && startIdentity(job.pid) === job.pidStart);
+	for (const job of verified) if (typeof job.scope === "string" && isJobScope(job.scope)) rememberScope(job.pid, job.scope);
 	return Promise.all(verified.map((job) => stopGroup(job.pid).catch((error: unknown) => log(`could not stop job ${job.id} of an unclaimed hand-over`, error))));
 }
 
