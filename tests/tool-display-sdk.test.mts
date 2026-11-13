@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { AgentSession, ExtensionError } from "@earendil-works/pi-coding-agent";
 
 import { agentRoot } from "./support/pi-runtime.mjs";
+import { TREE_GUIDELINE } from "../lib/tree-bash.ts";
 const scratch = mkdtempSync(join(tmpdir(), "tool-display-sdk-"));
 // Set before importing the SDK. This test must never read real settings or credentials.
 process.env.HOME = scratch;
@@ -53,11 +54,28 @@ async function start(mode: "tui" | "print") {
 	return { session, before, errors };
 }
 
-test("in the terminal UI the built-in tools gain the new rows and nothing the agent sees changes", { timeout: 20_000 }, async () => {
+/** The snapshot without the one bash guideline that Tool Display adds (lib/tree-bash.ts), and how often it was there. */
+function withoutTreeGuideline(seen: ReturnType<typeof snapshot>) {
+	const line = `- ${TREE_GUIDELINE}\n`;
+	const count = seen.prompt.split(line).length - 1;
+	return {
+		count,
+		seen: {
+			...seen,
+			prompt: seen.prompt.replace(line, ""),
+			tools: seen.tools.map((tool) => tool && { ...tool, promptGuidelines: tool.promptGuidelines?.filter((text) => text !== TREE_GUIDELINE) }),
+		},
+	};
+}
+
+test("in the terminal UI the built-in tools gain the new rows and nothing the agent sees changes but one bash guideline", { timeout: 20_000 }, async () => {
 	const { session, before, errors } = await start("tui");
 	try {
 		assert.deepEqual(errors, []);
-		assert.deepEqual(snapshot(session), before);
+		const after = withoutTreeGuideline(snapshot(session));
+		// The one change: bash says that its background processes end with the call.
+		assert.equal(process.platform === "win32" ? 0 : 1, after.count);
+		assert.deepEqual(after.seen, before);
 		// grep, find and ls stay off, as they were.
 		assert.deepEqual(session.getActiveToolNames().filter((name) => ["grep", "find", "ls"].includes(name)), []);
 		for (const name of BUILT_INS) assert.equal(session.getToolDefinition(name)?.renderShell, "self", name);
