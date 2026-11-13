@@ -5,6 +5,7 @@
  * that ignore SIGTERM. Each test marks its processes with a unique sleep
  * length, and SIGKILLs every marked process at its end, pass or fail.
  */
+import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -40,7 +41,9 @@ const modes: { mode: TreeMode; skip: string | false }[] = [
 
 for (const { mode, skip } of modes) {
 	describe(`bash leaves no process of the call (${mode})`, { skip }, () => {
-		test("a. GNU timeout with a TERM-ignoring child, past the tool's 2 s limit", { timeout: 15_000 }, async () => {
+		// GitHub's macOS runners have no `timeout` command (coreutils is not installed); the case needs one.
+		const noTimeout = spawnSync("sh", ["-c", "command -v timeout"]).status === 0 ? false : "no timeout command on this host";
+		test("a. GNU timeout with a TERM-ignoring child, past the tool's 2 s limit", { timeout: 15_000, skip: noTimeout }, async () => {
 			const value = marker();
 			try {
 				// The echo keeps bash from exec'ing timeout, so timeout forks and moves to a group of its own, as under xargs.
