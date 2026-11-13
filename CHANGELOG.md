@@ -2,7 +2,7 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
-## Unreleased
+## 0.45.0 - 2026-11-13
 
 ### Added
 
@@ -17,6 +17,36 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   the prompt cache of a session. A session that had turns before it had a list never
   starts to defer. `PI_EXTRAS_DEFER_TOOLS=0` turns it off.
   Requests to other providers do not change.
+
+### Changed
+
+- Bash and Shell Jobs (Linux): when a bash call or a shell job ends, every
+  process that it started ends too. This includes processes that moved to
+  another process group or session, for example GNU `timeout`, `setsid` and
+  `nohup ... &`. Before, these processes kept on running after the call.
+  - With a systemd user manager, each call and each job runs in a transient
+    scope (`systemd-run --user --scope`). The end sends SIGTERM to each
+    process of the scope, waits 3 seconds, then uses `cgroup.kill`.
+  - When systemd-run cannot start the scope, the command runs as before, in
+    its own process group, and the end also takes the session and the
+    descendants.
+  - A call in a scope costs about 15 ms more.
+- Bash: when the end of a call ends background processes, the result names
+  them, at most 5, then a count:
+  `` [Ended 1 background process when the call ended: sleep (pid 1234). To keep a process, start it as a shell job or with `systemd-run --user --unit=<name>`.] ``
+  The bash tool gets one guideline that says this. To keep a server, start
+  it with `shell_job_start` or `systemd-run --user --unit=<name>`.
+- These tree operations are on by default on Linux only. On macOS and
+  Windows, Pi's own bash operations run, as before.
+  - `PI_TREE_KILL=0` turns them off on Linux.
+  - `PI_TREE_KILL=1` turns them on for macOS (for a test only; never on
+    Windows).
+  - macOS test (macOS 27.2, `PI_TREE_KILL=1`): a timeout, an abort, and
+    `nohup` or `setsid` children of a call that is still running all end.
+    A process that leaves the group and loses its parent before the first
+    process scan (1 second) stays alive, because macOS gives no session
+    ID to read. Each call costs about 50 ms more there, one `ps` run. For
+    this reason the default on macOS stays off.
 
 ## 0.44.2 - 2026-11-13
 
