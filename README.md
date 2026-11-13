@@ -1828,6 +1828,13 @@ are hidden and to read `describeTool(name)` before the first call. Subagents
 keep every tool declared, since they have no `codemode`. The list applies at
 the next session start or `/reload`.
 
+A message that another extension sends can name a hidden tool, for example
+the `/goal` prompts of pi-agent-goal ("Call the propose_goal_draft tool").
+Such a message gets one more line that tells the model to call that tool from
+a `codemode` script. The line goes into that user message only, so the system
+prompt and the tool list stay the same for the whole session, and the prompt
+cache stays valid. What you type yourself is never changed.
+
 ## Copy Blocks
 
 Code blocks and quotes in the agent's replies are drawn as cards on a

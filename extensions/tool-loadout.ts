@@ -7,6 +7,11 @@
  * tool that hides its own declaration too. Scripts still see the full description and rules through
  * `describeTool()`, so a tool keeps its limits; tell the model which tools are hidden (AGENTS.md).
  *
+ * A message that another extension sends (for example pi-agent-goal's /goal prompts) can tell the
+ * model to call a hidden tool by name. Such a message gets a note on calling that tool from
+ * `codemode`. The note goes into the new user message only, so the system prompt and the declared
+ * tools stay the same for the whole session and the prompt cache stays valid.
+ *
  * Children do not load this extension (subagents/child.ts excludes its tool), so they keep the
  * tools declared: they have no `codemode`.
  */
@@ -41,6 +46,20 @@ export function hiddenNames(declared: readonly { name: string }[], codemodeOnly:
 	return [LOADOUT_TOOL, ...hidden];
 }
 
+/** The hidden tools that a text names as whole words, in the order the text first names them. */
+export function namedHiddenTools(text: string, active: readonly string[], codemodeOnly: readonly string[]): string[] {
+	const reachable = hiddenNames(active.map((name) => ({ name })), codemodeOnly).filter((name) => name !== LOADOUT_TOOL);
+	return reachable
+		.map((name) => ({ name, at: text.search(new RegExp(`(?<![A-Za-z0-9_-])${name}(?![A-Za-z0-9_-])`)) }))
+		.filter((found) => found.at >= 0)
+		.sort((a, b) => a.at - b.at)
+		.map((found) => found.name);
+}
+
+export function codemodeNote(names: readonly string[]): string {
+	return `(Tool note: ${names.join(", ")} ${names.length === 1 ? "is" : "are"} not declared in this session. Call ${names.length === 1 ? "it" : "them"} from a codemode script, for example \`await tools.${names[0]}({ ... })\`, and read describeTool("${names[0]}") for the parameters and rules first.)`;
+}
+
 export interface ToolLoadoutOptions {
 	/** The `toolLoadout` section; read from pi-extras.json when omitted. */
 	readonly config?: Record<string, unknown>;
@@ -61,4 +80,10 @@ export default function toolLoadout(pi: ExtensionAPI, options: ToolLoadoutOption
 			throw new Error("tool_loadout is not callable.");
 		},
 	} as ToolDefinition);
+	// Only extension messages: a user's own words stay as typed.
+	pi.on("input", (event) => {
+		if (event.source !== "extension") return { action: "continue" };
+		const names = namedHiddenTools(event.text, pi.getActiveTools(), config.codemodeOnly);
+		return names.length === 0 ? { action: "continue" } : { action: "transform", text: `${event.text}\n\n${codemodeNote(names)}` };
+	});
 }
