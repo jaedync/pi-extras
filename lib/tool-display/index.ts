@@ -37,7 +37,7 @@ import { openPopup, type PopupHost } from "../band/popup.ts";
 import { chainOperations, withChains, type ActiveRuns } from "../chain/exec.ts";
 import { sharedSleepWatch, type SleepWatch } from "../sleep-watch.ts";
 import { liveSleepRuns, runOperations } from "./live-sleeps.ts";
-import { treeBashOperations } from "../tree-bash.ts";
+import { treeBashOperations, withTreeGuideline } from "../tree-bash.ts";
 import { CHAIN_ENTRY, CHAIN_EVENT, ChainRun, type SavedChain } from "../chain/run.ts";
 import { splitChain } from "../chain/split.ts";
 import { TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../tool-count.ts";
@@ -541,7 +541,7 @@ function sessionTools(ctx: ExtensionContext, wrap: (operations: BashOperations) 
 	return {
 		definitions: {
 			read: createReadToolDefinition(cwd, { autoResizeImages: settings.getImageAutoResize() }),
-			bash: createBashToolDefinition(cwd, { operations, commandPrefix: settings.getShellCommandPrefix(), shellPath }),
+			bash: withTreeGuideline(createBashToolDefinition(cwd, { operations, commandPrefix: settings.getShellCommandPrefix(), shellPath })),
 			edit: createEditToolDefinition(cwd),
 			write: createWriteToolDefinition(cwd),
 			grep: createGrepToolDefinition(cwd),

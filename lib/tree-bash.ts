@@ -13,7 +13,18 @@ export interface BashSdk {
 	getShellConfig(customShellPath?: string): { shell: string; args: string[]; commandTransport?: "argv" | "stdin" };
 }
 
+const treeKills = () => process.platform !== "win32";
+
 export function treeBashOperations(sdk: BashSdk, shellPath: string | undefined): BashOperations {
-	if (process.platform === "win32") return sdk.createLocalBashOperations(shellPath ? { shellPath } : undefined);
+	if (!treeKills()) return sdk.createLocalBashOperations(shellPath ? { shellPath } : undefined);
 	return treeShellOperations(() => sdk.getShellConfig(shellPath)) as BashOperations;
+}
+
+/** The bash guideline that tells the model about the end of a call. */
+export const TREE_GUIDELINE = "Background processes that a bash call starts end when the call ends; to keep one, start it as a shell job or with `systemd-run --user --unit=<name> <command>`.";
+
+/** A bash definition with the tree guideline added, where these operations end the tree. */
+export function withTreeGuideline<T extends { promptGuidelines?: string[] | undefined }>(definition: T): T {
+	if (!treeKills()) return definition;
+	return { ...definition, promptGuidelines: [...(definition.promptGuidelines ?? []), TREE_GUIDELINE] };
 }

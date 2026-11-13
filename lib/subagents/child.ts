@@ -17,7 +17,7 @@ import { errorText, operationalError } from "../operational-log.ts";
 import { isVirtualModel } from "../routed-model.ts";
 import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
 import { callPhrase } from "../tool-phrase.ts";
-import { treeBashOperations } from "../tree-bash.ts";
+import { treeBashOperations, withTreeGuideline } from "../tree-bash.ts";
 import { PI_READ_TOOLS, readOnlyTools } from "./allowlist.ts";
 import { guardBash } from "./bash-guard.ts";
 import { restingBash } from "./bash-rest.ts";
@@ -207,13 +207,13 @@ export function childBash(sdk: Sdk, cwd: string, settings: SettingsManager, reco
 		changed: (paths: readonly string[], root: string) => bashChanged(record.name, paths, root),
 	} : undefined;
 	const shellPath = settings.getShellPath();
-	const definition = sdk.createBashToolDefinition(cwd, {
+	const definition = withTreeGuideline(sdk.createBashToolDefinition(cwd, {
 		commandPrefix: settings.getShellCommandPrefix(),
 		...(shellPath ? { shellPath } : {}),
 		// Every process a call starts ends with the call, also one that left its group (lib/process-tree.ts).
 		operations: treeBashOperations(sdk, shellPath),
 		...(prefix ? { spawnHook: confine(prefix) } : {}),
-	});
+	}));
 	return guardBash(definition, { ...(sandbox ? { sandbox } : {}), ...(changes ? { changes } : {}) }) as ToolDefinition;
 }
 
@@ -225,12 +225,12 @@ function readOnlyBash(sdk: Sdk, cwd: string, settings: SettingsManager, record: 
 	let why = "The sandbox tool failed.";
 	const prefix = readOnlyShellFor(hiding ?? NO_HIDING, (reason) => { why = reason; }, cwd);
 	const shellPath = settings.getShellPath();
-	const definition = sdk.createBashToolDefinition(cwd, {
+	const definition = withTreeGuideline(sdk.createBashToolDefinition(cwd, {
 		commandPrefix: settings.getShellCommandPrefix(),
 		...(shellPath ? { shellPath } : {}),
 		operations: treeBashOperations(sdk, shellPath),
 		...(prefix ? { spawnHook: confine(prefix) } : {}),
-	}) as ToolDefinition;
+	})) as ToolDefinition;
 	if (prefix) return definition;
 	warn(`subagents: ${record.name}'s bash is off, because its read-only sandbox does not run here. ${why}`);
 	return noShell(definition, why);
