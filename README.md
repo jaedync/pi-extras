@@ -2240,7 +2240,9 @@ that model, else your default. These settings come from the project's
 It goes into the tool's description with the model list. When the guide has a
 non-empty `## Summary` section, only that section goes in, with a pointer to
 the file: keep the rules that decide a choice in the summary and the evidence
-below it. Pi reads it when a
+below it. Claude Code, which Meridian runs, cuts a tool description at 4,096
+characters, so the description stops at that length and cuts the guide's end
+with a note: put the bans and the rules that matter most first. Pi reads it when a
 session starts and on `/reload`, never mid-session, since a changed tool
 description busts the prompt cache. `/subagents guide` edits it, or ask the
 agent to.

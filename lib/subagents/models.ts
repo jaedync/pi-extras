@@ -88,11 +88,13 @@ export function thinkingFor(choice: ModelChoice, perCall: Thinking | undefined, 
 	return isThinking(settings.defaultThinkingLevel) ? settings.defaultThinkingLevel : undefined;
 }
 
-/** One line per model for the tool description. */
+/**
+ * One line per model for the tool description. The ref only: the display name mostly repeats it
+ * ("Claude Opus 5.5 via Meridian"), and every request carries the table.
+ */
 export function modelTable(allowed: readonly ModelChoice[], settings: ThinkingSettings): string {
 	return allowed.map((choice) => {
-		const name = choice.model.name && choice.model.name !== choice.model.id ? ` (${choice.model.name})` : "";
 		const thinking = thinkingFor(choice, undefined, settings);
-		return `- ${choice.ref}${name}${thinking ? `, thinking ${thinking}` : ""}`;
+		return `- ${choice.ref}${thinking ? `, thinking ${thinking}` : ""}`;
 	}).join("\n");
 }

@@ -5,6 +5,23 @@
  */
 import { MAIN } from "./names.ts";
 
+/**
+ * Claude Code cuts an MCP tool description at this length (CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH),
+ * and Meridian sends pi's tools to it as MCP tools. The guide comes last, so it is cut to fit here,
+ * with a note, instead of losing its end silently.
+ */
+export const DESCRIPTION_MAX_CHARS = 4_096;
+const GUIDE_HEADING = "The user's notes on which model suits which work:";
+const GUIDE_CUT_NOTE = "\n(notes cut to fit; read the guide file for the rest)";
+
+function fitGuide(guide: string, room: number): string {
+	if (guide.length <= room) return guide;
+	const keep = Math.max(0, room - GUIDE_CUT_NOTE.length);
+	const cut = guide.slice(0, keep);
+	const lineEnd = cut.lastIndexOf("\n");
+	return `${lineEnd > 0 ? cut.slice(0, lineEnd) : cut}${GUIDE_CUT_NOTE}`;
+}
+
 export function subagentDescription(options: { models: string; defaultModel: string | null; guide: string; forChild: boolean }): string {
 	const lines = [
 		"Start a subagent: a separate Pi session on the model you choose, with a fresh context and similar tools. It runs in the background and its report reaches you as a message when it finishes; meanwhile keep working or end your turn. Pass wait: true only for a short check whose answer you need before your next step.",
@@ -25,8 +42,11 @@ export function subagentDescription(options: { models: string; defaultModel: str
 		options.models || "(none)",
 	];
 	if (options.defaultModel) lines.push(`Default when you name none: ${options.defaultModel}.`);
-	if (options.guide.trim()) lines.push("", "The user's notes on which model suits which work:", options.guide.trim());
-	return lines.join("\n");
+	const head = lines.join("\n");
+	const guide = options.guide.trim();
+	if (!guide) return head;
+	const room = DESCRIPTION_MAX_CHARS - head.length - GUIDE_HEADING.length - 3;
+	return room <= GUIDE_CUT_NOTE.length ? head : `${head}\n\n${GUIDE_HEADING}\n${fitGuide(guide, room)}`;
 }
 
 export function mainMessageDescription(): string {

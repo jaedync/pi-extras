@@ -60,13 +60,13 @@ test("thinking: per call, then scoped pattern, then per-model setting, then defa
 	assert.equal(thinkingFor(opusChoice!, undefined, {}), undefined);
 });
 
-test("model table lists each model with its effective thinking level", () => {
+test("model table lists each model ref with its effective thinking level; display names only repeat the ref", () => {
 	const allowed = allowedModels(scoped, opus);
 	const table = modelTable(allowed, { modelThinkingLevels: { "openai-codex/gpt-6.1-sol": "high" }, defaultThinkingLevel: "medium" });
 	assert.equal(table, [
-		"- anthropic/claude-opus-5-5 (Claude Opus 5.5), thinking medium",
-		"- anthropic/claude-fable-5-1 (Claude Fable 5.1), thinking medium",
-		"- openai-codex/gpt-6-luna (GPT-6 Luna), thinking low",
-		"- openai-codex/gpt-6.1-sol (GPT-6.1 Sol), thinking high",
+		"- anthropic/claude-opus-5-5, thinking medium",
+		"- anthropic/claude-fable-5-1, thinking medium",
+		"- openai-codex/gpt-6-luna, thinking low",
+		"- openai-codex/gpt-6.1-sol, thinking high",
 	].join("\n"));
 });

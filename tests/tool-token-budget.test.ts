@@ -7,14 +7,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { registerLinkTool } from "../lib/link-context/index.ts";
-import { subagentDescription } from "../lib/subagents/describe.ts";
+import { DESCRIPTION_MAX_CHARS, subagentDescription } from "../lib/subagents/describe.ts";
 import { subagentParams } from "../lib/subagents/tools.ts";
 
 const CHARS_PER_TOKEN = 2.75;
 const tokens = (description: string, parameters: unknown): number =>
 	Math.round(JSON.stringify({ name: "tool", description, input_schema: parameters }).length / CHARS_PER_TOKEN);
 
-const MODEL_LINE = "- anthropic/claude-opus-5-5 (Claude Opus 5.5 via Meridian), thinking high\n";
+const MODEL_LINE = "- anthropic/claude-opus-5-5, thinking high\n";
 const GUIDE = "- a model note of about one line, as a guide's Summary section has them.\n".repeat(15);
 
 test("subagent stays within its token budget with a summary-sized guide and 11 models", () => {
@@ -29,4 +29,23 @@ test("pull_link stays within its token budget", () => {
 	assert.ok(tool);
 	const used = tokens(tool.description, tool.parameters);
 	assert.ok(used <= 950, `pull_link uses about ${used} tokens; budget 950`);
+});
+
+/** Claude Code cuts an MCP tool description at 4,096 characters (CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH), so the guide's last lines were lost. */
+test("the subagent description never passes Claude Code's 4,096-character cut, and a long guide keeps its first lines", () => {
+	assert.equal(DESCRIPTION_MAX_CHARS, 4_096);
+	const models = MODEL_LINE.repeat(12);
+	for (const length of [0, 500, 1_500, 2_500, 4_000, 9_000]) {
+		const guide = ["- Never use model-x.", ...Array.from({ length: Math.ceil(length / 60) }, (_, i) => `- note ${i} about which model suits which work, one line.`)].join("\n");
+		const description = subagentDescription({ models, defaultModel: "anthropic/claude-opus-5-5", guide, forChild: false });
+		assert.ok(description.length <= DESCRIPTION_MAX_CHARS, `${description.length} characters with a ${length}-character guide`);
+		assert.match(description, /- Never use model-x\./, "the guide's first line, where the bans go, survives");
+	}
+});
+
+test("the subagent description's fixed text stays within 2,100 characters", () => {
+	const guide = "- a model note of about one line, as a guide's Summary section has them.\n".repeat(14).trim();
+	const description = subagentDescription({ models: MODEL_LINE.repeat(12).trim(), defaultModel: "anthropic/claude-opus-5-5", guide, forChild: false });
+	const fixed = description.length - guide.length - MODEL_LINE.repeat(12).trim().length;
+	assert.ok(fixed <= 2_100, `the fixed text uses ${fixed} characters; budget 2100`);
 });
