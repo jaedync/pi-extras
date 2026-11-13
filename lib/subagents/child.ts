@@ -17,6 +17,7 @@ import { errorText, operationalError } from "../operational-log.ts";
 import { isVirtualModel } from "../routed-model.ts";
 import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
 import { callPhrase } from "../tool-phrase.ts";
+import { treeBashOperations } from "../tree-bash.ts";
 import { PI_READ_TOOLS, readOnlyTools } from "./allowlist.ts";
 import { guardBash } from "./bash-guard.ts";
 import { restingBash } from "./bash-rest.ts";
@@ -188,7 +189,7 @@ export interface LauncherDeps {
  * unless a spawn named one), replacing whichever bash the child would get. A spawn hook confines a worktree child's commands, so
  * its transcript keeps the command it wrote.
  */
-function childBash(sdk: Sdk, cwd: string, settings: SettingsManager, record: AgentRecord, deps: LauncherDeps, hidden: HiddenPaths | undefined): ToolDefinition {
+export function childBash(sdk: Sdk, cwd: string, settings: SettingsManager, record: AgentRecord, deps: LauncherDeps, hidden: HiddenPaths | undefined): ToolDefinition {
 	const warn = (message: string) => deps.warn?.(message);
 	const hiding = hidden ? { dirs: hidden.dirs, files: hidden.files } : undefined;
 	if (record.readOnlyShell) return readOnlyBash(sdk, cwd, settings, record, warn, hiding);
@@ -209,6 +210,8 @@ function childBash(sdk: Sdk, cwd: string, settings: SettingsManager, record: Age
 	const definition = sdk.createBashToolDefinition(cwd, {
 		commandPrefix: settings.getShellCommandPrefix(),
 		...(shellPath ? { shellPath } : {}),
+		// Every process a call starts ends with the call, also one that left its group (lib/process-tree.ts).
+		operations: treeBashOperations(sdk, shellPath),
 		...(prefix ? { spawnHook: confine(prefix) } : {}),
 	});
 	return guardBash(definition, { ...(sandbox ? { sandbox } : {}), ...(changes ? { changes } : {}) }) as ToolDefinition;
@@ -225,6 +228,7 @@ function readOnlyBash(sdk: Sdk, cwd: string, settings: SettingsManager, record: 
 	const definition = sdk.createBashToolDefinition(cwd, {
 		commandPrefix: settings.getShellCommandPrefix(),
 		...(shellPath ? { shellPath } : {}),
+		operations: treeBashOperations(sdk, shellPath),
 		...(prefix ? { spawnHook: confine(prefix) } : {}),
 	}) as ToolDefinition;
 	if (prefix) return definition;

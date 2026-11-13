@@ -9,6 +9,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, unlinkSync } from "node:fs";
+import { killScopeNow, readIfThere, reapScope, scopeMembers, scopeSlice, signal as signalPid } from "./process-tree.ts";
 import { mayStop } from "./shell-jobs-adopt.ts";
 import { TERM_GRACE_MS } from "./shell-jobs-core.ts";
 import type { JobsWidget } from "./shell-jobs-widget.ts";
@@ -103,6 +104,12 @@ interface GlobalRegistry {
 	readonly runtimes: Set<Runtime>;
 	exitNetInstalled: boolean;
 	reloads: WeakMap<object, Runtime>;
+	/**
+	 * The systemd scope of each job's process group, by pgid, while the job
+	 * owns it. A scope holds every process of the job, also one that left the
+	 * group by setsid. Absent on a registry that an older version made.
+	 */
+	scopes?: Map<number, string>;
 }
 
 export const EXIT_KILL_DELAY_MS = 25;
@@ -128,6 +135,7 @@ export function registry(): GlobalRegistry {
 	}
 	// The exit net may have been installed by a pre-handoff version of this module.
 	found.reloads ??= new WeakMap();
+	found.scopes ??= new Map();
 	return found;
 }
 
@@ -234,7 +242,47 @@ export function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** The unit names that shell-jobs gives its scopes (lib/process-tree.ts unitName). */
+const JOB_SCOPE = /^pi-job-\d+-[0-9a-f]+\.scope$/;
+
+function scopes(): Map<number, string> {
+	return registry().scopes ??= new Map();
+}
+
+/** Record the scope that holds a job's process group. */
+export function rememberScope(pgid: number, dir: string): void {
+	scopes().set(pgid, dir);
+}
+
+/**
+ * The scope of a job's group: the one recorded at its start, else the scope
+ * its leader runs in now, when that is a shell-jobs scope. A job adopted at a
+ * restart has no record, and its callers have checked that its leader is the
+ * job's own process.
+ */
+export function scopeOf(pgid: number): string | undefined {
+	const known = scopes().get(pgid);
+	if (known !== undefined) return known;
+	const slice = scopeSlice();
+	if (slice === null) return undefined;
+	const line = readIfThere(`/proc/${pgid}/cgroup`)?.split("\n").find((text) => text.startsWith("0::"));
+	const path = line?.slice(3).trim() ?? "";
+	const name = path.slice(path.lastIndexOf("/") + 1);
+	if (!JOB_SCOPE.test(name) || `/sys/fs/cgroup${path}` !== `${slice}/${name}`) return undefined;
+	rememberScope(pgid, `${slice}/${name}`);
+	return `${slice}/${name}`;
+}
+
+/** Whether any process of the job is left: in its group, or in its scope. */
+export function treeAlive(pgid: number): boolean {
+	if (groupExists(pgid)) return true;
+	const scope = scopes().get(pgid);
+	return scope !== undefined && scopeMembers(scope).length > 0;
+}
+
 function killQuietly(pgid: number): void {
+	const scope = registry().scopes?.get(pgid);
+	if (scope !== undefined) { killScopeNow(scope); reapScope(scope, true); }
 	try {
 		process.kill(-pgid, "SIGKILL");
 	} catch {
@@ -271,13 +319,16 @@ async function waitForGroupGone(pgid: number, ms: number): Promise<boolean> {
 	const deadline = Date.now() + ms;
 	while (Date.now() < deadline) {
 		await sleep(EXIT_KILL_DELAY_MS);
-		if (!groupExists(pgid)) return true;
+		if (!treeAlive(pgid)) return true;
 	}
-	return !groupExists(pgid);
+	return !treeAlive(pgid);
 }
 
 /** How many processes a group still has, or null when `pgrep` cannot tell. */
 export function groupSize(pgid: number): Promise<number | null> {
+	// A scope holds the group and every process that left it.
+	const scope = scopes().get(pgid);
+	if (scope !== undefined) return Promise.resolve(scopeMembers(scope).length);
 	return new Promise((resolve) => {
 		execFile("pgrep", ["-g", String(pgid)], { timeout: 2000 }, (error, stdout, stderr) => {
 			// pgrep exits 1, silent, when nothing matches. Anything else is a failure to look,
@@ -290,12 +341,28 @@ export function groupSize(pgid: number): Promise<number | null> {
 
 /** TERM the group, wait up to the grace period for it to drain, then KILL. */
 export async function stopGroup(pgid: number, graceMs = TERM_GRACE_MS): Promise<CleanupOutcome> {
+	const scope = scopeOf(pgid);
+	const outcome = await stopTree(pgid, scope, graceMs);
+	if (scope !== undefined) reapScope(scope);
+	if (outcome.cleaned && scope !== undefined) scopes().delete(pgid);
+	return outcome;
+}
+
+/** Signal every process of a job's scope; the group gets its own signal. */
+function signalScope(scope: string | undefined, signal: NodeJS.Signals): void {
+	if (scope === undefined) return;
+	for (const pid of scopeMembers(scope)) signalPid(pid, signal);
+}
+
+async function stopTree(pgid: number, scope: string | undefined, graceMs: number): Promise<CleanupOutcome> {
 	const term = signalGroup(pgid, "SIGTERM");
-	if (term === "gone") return { cleaned: true, denied: false };
+	signalScope(scope, "SIGTERM");
+	if (!treeAlive(pgid)) return { cleaned: true, denied: false };
 	const denied = term === "denied";
 	if (await waitForGroupGone(pgid, graceMs)) return { cleaned: true, denied };
 	const killed = signalGroup(pgid, "SIGKILL");
-	if (killed === "gone") return { cleaned: true, denied };
+	if (scope !== undefined) killScopeNow(scope);
+	if (!treeAlive(pgid)) return { cleaned: true, denied };
 	// Confirm death instead of assuming it: a killed group takes a moment to
 	// disappear, and claiming success early both warns falsely and drops
 	// ownership of a group that may still be alive.
@@ -372,7 +439,7 @@ export function scheduleResidualReaper(
 		const now = Date.now();
 		for (const [pgid, claimedAt] of [...runtime.residualClaims]) {
 			// Each claim gets its own wait: a group first rechecked late must not lose its claim early.
-			if (now - claimedAt >= deadlineMs || !groupExists(pgid)) runtime.residualClaims.delete(pgid);
+			if (now - claimedAt >= deadlineMs || !treeAlive(pgid)) runtime.residualClaims.delete(pgid);
 		}
 		if (runtime.residualClaims.size > 0) return;
 		stopResidualReaper(runtime);

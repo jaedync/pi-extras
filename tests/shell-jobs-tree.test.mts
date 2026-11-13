@@ -3,49 +3,17 @@
  * setsid and so left the job's process group. Each test marks its processes
  * with a unique sleep length and SIGKILLs every marked process at its end.
  */
-import { after, afterEach, describe, test } from "node:test";
+import { afterEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { scopeSupported } from "../lib/process-tree.ts";
+import { killMarked, marked, marker as mark, survivors } from "./support/process-marks.ts";
 import { cleanup, createFakePi, fire, shellJobs, sleep } from "./support/shell-jobs-harness.mts";
 
 afterEach(cleanup);
 
-const markers: string[] = [];
-function marker(): string {
-	const value = `${2000 + markers.length}.${process.pid}${Math.floor(Math.random() * 1e6)}`;
-	markers.push(value);
-	return value;
-}
+const marker = () => mark(2000);
 
-function marked(value: string): number[] {
-	const found: number[] = [];
-	for (const name of readdirSync("/proc")) {
-		if (!/^\d+$/.test(name) || Number(name) === process.pid) continue;
-		try {
-			if (!readFileSync(`/proc/${name}/cmdline`, "utf8").split("\0").some((arg) => arg.includes(value))) continue;
-			const stat = readFileSync(`/proc/${name}/stat`, "utf8");
-			const state = stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3);
-			if (state !== "Z" && state !== "X") found.push(Number(name));
-		} catch { /* ended while read */ }
-	}
-	return found;
-}
-
-async function survivors(value: string, waitMs = 1500): Promise<number[]> {
-	const deadline = Date.now() + waitMs;
-	let left = marked(value);
-	while (left.length > 0 && Date.now() < deadline) { await sleep(25); left = marked(value); }
-	return left;
-}
-
-function killMarked(value: string): void {
-	for (const pid of marked(value)) { try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } }
-}
-
-after(() => { for (const value of markers) killMarked(value); });
-
-const scope = process.platform === "linux" && spawnSync("systemd-run", ["--user", "--scope", "--collect", "--quiet", "--", "true"], { timeout: 5000, stdio: "ignore" }).status === 0;
+const scope = scopeSupported();
 
 async function started() {
 	const app = createFakePi();

@@ -25,7 +25,7 @@ import { DISPLAY_SETTINGS_EVENT, FOLD_LIVE_EVENT, UnreadableJsonError } from "..
 import { pathToFileURL } from "node:url";
 import {
 	createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition,
-	createLocalBashOperations, createLsToolDefinition, createReadToolDefinition, createWriteToolDefinition, getAgentDir,
+	createLocalBashOperations, createLsToolDefinition, createReadToolDefinition, createWriteToolDefinition, getAgentDir, getShellConfig,
 	getLanguageFromPath, getMarkdownTheme, highlightCode, keyHint, renderDiff, SettingsManager,
 	type BashOperations, type ExtensionAPI, type ExtensionContext, type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -37,6 +37,7 @@ import { openPopup, type PopupHost } from "../band/popup.ts";
 import { chainOperations, withChains, type ActiveRuns } from "../chain/exec.ts";
 import { sharedSleepWatch, type SleepWatch } from "../sleep-watch.ts";
 import { liveSleepRuns, runOperations } from "./live-sleeps.ts";
+import { treeBashOperations } from "../tree-bash.ts";
 import { CHAIN_ENTRY, CHAIN_EVENT, ChainRun, type SavedChain } from "../chain/run.ts";
 import { splitChain } from "../chain/split.ts";
 import { TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../tool-count.ts";
@@ -535,7 +536,8 @@ function sessionTools(ctx: ExtensionContext, wrap: (operations: BashOperations) 
 	const settings = SettingsManager.create(ctx.cwd, getAgentDir(), { projectTrusted: ctx.isProjectTrusted() });
 	const cwd = ctx.cwd;
 	const shellPath = settings.getShellPath();
-	const operations = wrap(createLocalBashOperations({ shellPath }));
+	// Every process a call starts ends with the call, also one that left its group (lib/process-tree.ts).
+	const operations = wrap(treeBashOperations({ createLocalBashOperations, getShellConfig }, shellPath));
 	return {
 		definitions: {
 			read: createReadToolDefinition(cwd, { autoResizeImages: settings.getImageAutoResize() }),

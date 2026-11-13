@@ -51,7 +51,7 @@ import {
 	createRuntime,
 	discardLog,
 	EXIT_KILL_DELAY_MS,
-	groupExists,
+	treeAlive,
 	groupSize,
 	type Job,
 	jobStatusText,
@@ -61,11 +61,13 @@ import {
 	type Runtime,
 	scheduleResidualReaper,
 	sleep,
+	rememberScope,
 	stopGroup,
 	takeReload,
 } from "../lib/shell-jobs-process.ts";
 import { acknowledgeCompletion, attachDelivery, COMPLETION_CUSTOM_TYPE, noteRunStart, reconcileDeliveries, settleDeliveries } from "../lib/shell-jobs-delivery.ts";
 import { jobEnv, type Launch, launchArgs, type SessionFacts, withExitFile } from "../lib/shell-jobs-launch.ts";
+import { newScope } from "../lib/process-tree.ts";
 import { buildHandover, claimForSession, type Ending, firstLook, jobsFromHandover, mayStop, startIdentity, stopAdoptPoll, sweepHandovers, watchAdopted } from "../lib/shell-jobs-adopt.ts";
 import { type Handover, writeHandover } from "../lib/shell-jobs-handover.ts";
 import { restartPending } from "../lib/restart-intent.ts";
@@ -186,7 +188,7 @@ async function finalize(runtime: Runtime, id: string, code: number | null, signa
 	// started. It is stopped below, as it always was; the completion now says so.
 	// A job that ended while no Pi watched it keeps its group: nothing confirms the group is still its own.
 	const touch = outcome.touchGroup !== false;
-	const left = touch && groupExists(current.pid) ? await groupSize(current.pid) : 0;
+	const left = touch && treeAlive(current.pid) ? await groupSize(current.pid) : 0;
 	const cleanup = touch ? await stopGroup(current.pid) : { cleaned: true, denied: false };
 	// Re-read after the await: an explicit kill may have claimed this job while
 	// the group was draining, and that claim must win over the earlier snapshot.
@@ -274,7 +276,11 @@ type SpawnedJob = { readonly child: ReturnType<typeof spawn>; started(): void };
  * caller's wait for the spawn event reports the error instead.
  */
 function spawnJob(launch: Launch, cwd: string, fd: number, id: string): SpawnedJob {
-	const child = spawn(launch.shell, [...launch.args], { cwd, env: launch.env, detached: true, stdio: ["ignore", fd, fd] });
+	// In a systemd scope where one can start, so a kill also reaches a process that left the group (lib/process-tree.ts).
+	const scope = newScope("pi-job", [launch.shell, ...launch.args]);
+	const [file = launch.shell, ...args] = scope?.argv ?? [launch.shell, ...launch.args];
+	const child = spawn(file, args, { cwd, env: launch.env, detached: true, stdio: ["ignore", fd, fd] });
+	if (scope !== undefined && typeof child.pid === "number") rememberScope(child.pid, scope.dir);
 	let spawned = false;
 	child.on("error", (error) => {
 		if (spawned) logError(`job ${id} process error`, error);

@@ -6,60 +6,16 @@
  * length, and SIGKILLs every marked process at its end, pass or fail.
  */
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
-import { after, describe, test } from "node:test";
+import { describe, test } from "node:test";
 import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
-import { treeShellOperations, type TreeMode } from "../lib/process-tree.ts";
+import { scopeSupported, treeShellOperations, type TreeMode } from "../lib/process-tree.ts";
+import { killMarked, marker as mark, survivors } from "./support/process-marks.ts";
+
+const marker = () => mark(1000);
 
 const linux = process.platform === "linux";
 const GRACE_MS = 300;
-const markers: string[] = [];
-
-/** A sleep length no other process uses, so a scan finds this test's processes only. */
-function marker(): string {
-	const value = `${1000 + markers.length}.${process.pid}${Math.floor(Math.random() * 1e6)}`;
-	markers.push(value);
-	return value;
-}
-
-/** Live (not zombie) processes whose command line holds the marker. */
-function marked(value: string): number[] {
-	const found: number[] = [];
-	for (const name of readdirSync("/proc")) {
-		if (!/^\d+$/.test(name) || Number(name) === process.pid) continue;
-		try {
-			const cmdline = readFileSync(`/proc/${name}/cmdline`, "utf8");
-			if (!cmdline.split("\0").some((arg) => arg.includes(value))) continue;
-			const stat = readFileSync(`/proc/${name}/stat`, "utf8");
-			const state = stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3);
-			if (state !== "Z" && state !== "X") found.push(Number(name));
-		} catch {
-			// The process ended while it was read.
-		}
-	}
-	return found;
-}
-
-async function survivors(value: string, waitMs = 1000): Promise<number[]> {
-	const deadline = Date.now() + waitMs;
-	let left = marked(value);
-	while (left.length > 0 && Date.now() < deadline) {
-		await new Promise((resolve) => setTimeout(resolve, 25));
-		left = marked(value);
-	}
-	return left;
-}
-
-function killMarked(value: string): void {
-	for (const pid of marked(value)) {
-		try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
-	}
-}
-
-after(() => { for (const value of markers) killMarked(value); });
-
-const SCOPE = linux && spawnSync("systemd-run", ["--user", "--scope", "--collect", "--quiet", "--", "true"], { timeout: 5000, stdio: "ignore" }).status === 0;
+const SCOPE = scopeSupported();
 
 function bash(mode: TreeMode) {
 	const operations = treeShellOperations(() => ({ shell: "/bin/bash", args: ["-c"] }), { graceMs: GRACE_MS, mode });
@@ -92,7 +48,7 @@ for (const { mode, skip } of modes) {
 				const result = await run(mode, `timeout 400 sh -c 'trap "" TERM; sleep ${value}'; echo end`, 2);
 				assert.equal(result.error, true);
 				assert.match(result.text, /timed out after 2 seconds/);
-				assert.deepEqual(await survivors(value), []);
+				assert.deepEqual(await survivors(value, 1000), []);
 			} finally { killMarked(value); }
 		});
 
@@ -102,7 +58,7 @@ for (const { mode, skip } of modes) {
 				const result = await run(mode, `setsid sh -c 'sleep ${value}' & echo started`);
 				assert.equal(result.error, false, result.text);
 				assert.match(result.text, /started/);
-				assert.deepEqual(await survivors(value), []);
+				assert.deepEqual(await survivors(value, 1000), []);
 			} finally { killMarked(value); }
 		});
 
@@ -111,7 +67,7 @@ for (const { mode, skip } of modes) {
 			try {
 				const result = await run(mode, `sh -c 'trap "" TERM; sleep ${value}' & sleep 0.2; echo done`);
 				assert.equal(result.error, false, result.text);
-				assert.deepEqual(await survivors(value), []);
+				assert.deepEqual(await survivors(value, 1000), []);
 			} finally { killMarked(value); }
 		});
 
@@ -120,7 +76,7 @@ for (const { mode, skip } of modes) {
 			try {
 				const result = await run(mode, `sh -c 'trap "" TERM; sleep ${value}'`, 1);
 				assert.equal(result.error, true);
-				assert.deepEqual(await survivors(value), []);
+				assert.deepEqual(await survivors(value, 1000), []);
 			} finally { killMarked(value); }
 		});
 
@@ -134,7 +90,7 @@ for (const { mode, skip } of modes) {
 				assert.equal(result.error, true);
 				assert.match(result.text, /aborted/);
 				assert.ok(Date.now() - started < 10_000, "the abort ended the call");
-				assert.deepEqual(await survivors(value), []);
+				assert.deepEqual(await survivors(value, 1000), []);
 			} finally { killMarked(value); }
 		});
 
