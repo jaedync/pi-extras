@@ -20,7 +20,8 @@ after(() => { for (const dir of dirs) rmSync(dir, { recursive: true, force: true
 type Execute = (id: string, params: { command: string; timeout?: number }, signal?: AbortSignal) => Promise<{ content: { text: string }[] }>;
 const linux = process.platform === "linux";
 // The tree operations are on by default on Linux only; PI_TREE_KILL=1 turns them on elsewhere.
-const on = treeKillOn() ? false : "the tree operations are off here";
+// Off Linux the fallback misses this command's escaped child (tests/process-tree.test.ts a2), so the check is for Linux.
+const on = !treeKillOn() ? "the tree operations are off here" : linux ? false : "the fallback off Linux misses a child that left the group before the first scan";
 // GNU timeout moves to a group of its own; the echo keeps bash from exec'ing it.
 const escaping = (value: string) => `timeout 400 sh -c 'trap "" TERM; sleep ${value}' & sleep 0.3; echo started; cat /proc/self/cgroup 2>/dev/null`;
 const SCOPE = linux && scopeSupported();

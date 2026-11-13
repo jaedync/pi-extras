@@ -51,6 +51,18 @@ for (const { mode, skip } of modes) {
 			} finally { killMarked(value); }
 		});
 
+		// Off Linux the fallback has no session to read: a process that leaves the group and loses its parent before the first scan escapes it.
+		const noSession = mode === "group" && process.platform !== "linux" ? "macOS fallback: no session, and the parent ended before the first scan" : false;
+		test("a2. GNU timeout in the background, at a normal end before the first scan", { timeout: 15_000, todo: noSession }, async () => {
+			const value = marker();
+			try {
+				const result = await run(mode, `timeout 400 sh -c 'trap "" TERM; sleep ${value}' & sleep 0.3; echo started`);
+				assert.equal(result.error, false, result.text);
+				assert.match(result.text, /started/);
+				assert.deepEqual(await survivors(value, 1000), []);
+			} finally { killMarked(value); }
+		});
+
 		test("b. a setsid child started in the background, at a normal end", { timeout: 15_000, skip: mode === "group" ? "a group scan cannot see a setsid child whose parent ended" : false }, async () => {
 			const value = marker();
 			try {
