@@ -10,12 +10,11 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   it marks the tools named in `deferTools.names` (`pi-extras.json`)
   `defer_loading: true`, so their declarations leave the prompt and the model
   loads them through tool search. The README gives a recommended list of 13
-  tools. Turn it on only with a Meridian build that keeps its single-turn
-  limit for sessions with deferred tools: Meridian 1.89.0 removes the limit,
-  and each turn with a tool call then costs one more hidden model turn. Each
-  session keeps the list of its start in a session entry, also after a
-  resume, fork or `/reload`, so a config edit never rewrites the prompt
-  cache of a session. A session that had turns before it had a list never
+  tools. Turn it on only with Meridian 1.89.0 or newer: older builds send
+  deferred tools in full and add a hidden model turn to each turn with a
+  tool call. Each session keeps the list of its start in a session entry,
+  also after a resume, fork or `/reload`, so a config edit never rewrites
+  the prompt cache of a session. A session that had turns before it had a list never
   starts to defer. `PI_EXTRAS_DEFER_TOOLS=0` turns it off.
   Requests to other providers do not change.
 

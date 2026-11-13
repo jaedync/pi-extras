@@ -72,12 +72,27 @@ test("a tool that already has defer_loading keeps its value", () => {
 	assert.equal(tools[2].defer_loading, true);
 });
 
-test("a tool with cache_control is not deferred and keeps its cache_control in place", () => {
+test("a listed tool with cache_control is deferred and loses its cache_control", () => {
 	const input = payload(tool("read"), tool("list_peers"), tool("gov_search", { cache_control: { type: "ephemeral" } }));
 	const out = deferPayload(input, ["gov_search", "list_peers"]) as { tools: Array<Record<string, unknown>> };
-	assert.deepEqual(deferredNames(out), ["list_peers"]);
-	assert.deepEqual(out.tools[2], input.tools[2]);
-	assert.deepEqual(Object.keys(out.tools[2]), ["name", "description", "input_schema", "cache_control"]);
+	assert.deepEqual(deferredNames(out), ["list_peers", "gov_search"]);
+	assert.deepEqual(Object.keys(out.tools[2]), ["name", "description", "input_schema", "defer_loading"]);
+	assert.ok(Object.hasOwn(input.tools[2] as object, "cache_control"), "the input keeps its key");
+});
+
+test("cache retention does not change the deferred set: same set with and without cache_control on the last tool", () => {
+	const names = ["gov_search", "list_peers"];
+	const plain = payload(tool("read"), tool("list_peers"), tool("gov_search"));
+	const cached = payload(tool("read"), tool("list_peers"), tool("gov_search", { cache_control: { type: "ephemeral", ttl: "1h" } }));
+	assert.deepEqual(deferredNames(deferPayload(cached, names)), deferredNames(deferPayload(plain, names)));
+	assert.equal(JSON.stringify(deferPayload(cached, names)), JSON.stringify(deferPayload(plain, names)));
+	for (const out of [deferPayload(cached, names), deferPayload(plain, names)]) {
+		for (const t of (out as { tools: Array<Record<string, unknown>> }).tools) assert.ok(!(t.defer_loading === true && Object.hasOwn(t, "cache_control")), String(t.name));
+	}
+});
+
+test("the all-deferred guard still holds when the last tool has cache_control", () => {
+	assert.equal(deferPayload(payload(tool("list_peers"), tool("gov_search", { cache_control: { type: "ephemeral" } })), ["gov_search", "list_peers"]), undefined);
 });
 
 test("no match, no tools or a non-object payload: undefined (Pi keeps its payload)", () => {

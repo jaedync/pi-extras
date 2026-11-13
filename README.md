@@ -1851,11 +1851,11 @@ request to Meridian. A request goes to Meridian when its model uses the
 `anthropic-messages` API and has a Meridian base URL or sends the
 `x-meridian-agent` header. Requests to all other providers do not change.
 
-It is off by default. When a request defers a tool, Meridian removes its
-single-turn limit, and each turn with a tool call then costs one more hidden
-model turn. That cost is larger than the saving. Turn it on only with a
-Meridian build that keeps the single-turn limit for sessions with deferred
-tools. This is the recommended list (tools used in under 5% of sessions):
+It is off by default. Older Meridian builds send deferred tools in full and
+add a hidden model turn to each turn with a tool call, so deferral costs more
+than it saves there. Turn it on only with Meridian 1.89.0 or newer, which
+keeps tool search and has no such extra turn. This is the recommended list
+(tools used in under 5% of sessions):
 
 ```json
 {
@@ -1891,9 +1891,12 @@ gives the same bytes, so a cache warm repeats the real request.
 
 Some tools are never deferred: `read`, `bash`, `edit`, `write`, `codemode` and
 `powershell`. A tool that already has a `defer_loading` value keeps it. A
-tool with `cache_control` stays loaded, because Anthropic does not accept
-`cache_control` on a deferred tool. When every tool of a request would be
-deferred, the request does not change, because one tool must stay loaded.
+listed tool that has `cache_control` is deferred too, and its
+`cache_control` is removed, because Anthropic does not accept both on one
+tool. Meridian does not send a tool's `cache_control` upstream, so this
+changes nothing there, and the deferred set does not depend on Pi's cache
+retention setting. When every tool of a request would be deferred, the
+request does not change, because one tool must stay loaded.
 
 A tool that Tool Loadout hides (`toolLoadout.codemodeOnly`) is not in the
 request, so Defer Tools does nothing for it. Subagents do not load Defer Tools.

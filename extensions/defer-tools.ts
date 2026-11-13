@@ -18,8 +18,9 @@ import { readSection } from "../lib/extras-config.ts";
 
 /**
  * Tools used in under 5% of sessions on two machines over 14 days: a list to paste into
- * `deferTools.names`. Not the default: with any tool deferred, Meridian lifts its single-turn cap
- * and every tool-call turn pays an extra hidden model turn, which costs more than deferral saves.
+ * `deferTools.names`. Not the default: Meridian builds older than 1.89.0 send deferred tools in
+ * full and add a hidden digest turn to each tool-call turn, so turn it on only with Meridian
+ * 1.89.0 or newer (upstream #1368 and #1370).
  */
 export const RECOMMENDED_DEFER_TOOLS: readonly string[] = Object.freeze([
 	"agent_send", "list_peers", "agent_request", "intercom", "artifact_feedback", "artifact_check", "gov_search",
@@ -115,8 +116,19 @@ function deferrable(tool: unknown, names: ReadonlySet<string>): tool is ToolLike
 	if (!tool || typeof tool !== "object") return false;
 	const { name } = tool as ToolLike;
 	return typeof name === "string" && names.has(name) && !neverDeferred(name)
-		// A value someone set stays. Anthropic rejects cache_control on a deferred tool, and the breakpoint must not move.
-		&& !Object.hasOwn(tool, "defer_loading") && !Object.hasOwn(tool, "cache_control");
+		// A value someone set stays.
+		&& !Object.hasOwn(tool, "defer_loading");
+}
+
+/**
+ * A listed tool, deferred. Pi puts `cache_control` on the last tool only while cache retention is
+ * not `none`, so keeping such a tool loaded would tie the deferred set to that setting. Anthropic
+ * rejects `cache_control` on a deferred tool, so the key goes; Meridian (the only target) rebuilds
+ * tools through MCP and never forwards a client's tool `cache_control`, so nothing changes upstream.
+ */
+function deferred(tool: ToolLike): ToolLike {
+	const { cache_control: _dropped, ...rest } = tool;
+	return { ...rest, defer_loading: true };
 }
 
 /**
@@ -133,7 +145,7 @@ export function deferPayload(payload: unknown, names: readonly string[]): unknow
 	if (!marks.includes(true)) return undefined;
 	const stillLoaded = tools.some((tool, index) => !marks[index] && (tool as { defer_loading?: unknown } | null)?.defer_loading !== true);
 	if (!stillLoaded) return undefined;
-	return { ...payload, tools: tools.map((tool, index) => marks[index] ? { ...(tool as ToolLike), defer_loading: true } : tool) };
+	return { ...payload, tools: tools.map((tool, index) => marks[index] ? deferred(tool as ToolLike) : tool) };
 }
 
 type SessionStore = Map<string, DeferConfig>;
