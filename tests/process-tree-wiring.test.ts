@@ -10,6 +10,7 @@ import { after, test } from "node:test";
 import * as sdk from "@earendil-works/pi-coding-agent";
 import { productionDeps } from "../lib/tool-display/index.ts";
 import { childBash } from "../lib/subagents/child.ts";
+import { scopeSupported } from "../lib/process-tree.ts";
 import { killMarked, marker as mark, survivors } from "./support/process-marks.ts";
 
 const marker = () => mark(3000);
@@ -19,7 +20,16 @@ after(() => { for (const dir of dirs) rmSync(dir, { recursive: true, force: true
 type Execute = (id: string, params: { command: string; timeout?: number }, signal?: AbortSignal) => Promise<{ content: { text: string }[] }>;
 const linux = process.platform === "linux";
 // GNU timeout moves to a group of its own; the echo keeps bash from exec'ing it.
-const escaping = (value: string) => `timeout 400 sh -c 'trap "" TERM; sleep ${value}' & sleep 0.3; echo started`;
+const escaping = (value: string) => `timeout 400 sh -c 'trap "" TERM; sleep ${value}' & sleep 0.3; echo started; cat /proc/self/cgroup`;
+const SCOPE = linux && scopeSupported();
+const GUIDELINE = /end when the call ends.*shell job.*systemd-run --user --unit/;
+
+/** The call ran in a scope of its own where one can start, and the end named what it ended. */
+function ranInTree(text: string): void {
+	assert.match(text, /started/);
+	if (SCOPE) assert.match(text, /\/pi-bash-\d+-[0-9a-f]+\.scope$/m);
+	assert.match(text, /Ended \d+ background process(es)? when the call ended: /);
+}
 
 test("Tool Display's bash ends a process that left the call's group", { skip: linux ? false : "the check reads /proc", timeout: 20_000 }, async () => {
 	const value = marker();
@@ -30,8 +40,9 @@ test("Tool Display's bash ends a process that left the call's group", { skip: li
 	try {
 		const ctx = { cwd: dir, isProjectTrusted: () => false } as unknown as Parameters<ReturnType<typeof productionDeps>["tools"]>[0];
 		const tools = productionDeps().tools(ctx, (operations) => operations);
+		assert.ok((tools.definitions.bash.promptGuidelines ?? []).some((line) => GUIDELINE.test(line)), "the bash guideline names the way to keep a process");
 		const result = await (tools.definitions.bash.execute as unknown as Execute)("w1", { command: escaping(value) });
-		assert.match(result.content[0]!.text, /started/);
+		ranInTree(result.content[0]!.text);
 		assert.deepEqual(await survivors(value), []);
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -48,8 +59,9 @@ test("a subagent's bash ends a process that left the call's group", { skip: linu
 		const record = { name: "w", parent: "main", depth: 1, task: "t" } as unknown as Parameters<typeof childBash>[3];
 		const deps = {} as unknown as Parameters<typeof childBash>[4];
 		const definition = childBash(sdk, dir, sdk.SettingsManager.inMemory(), record, deps, undefined);
+		assert.ok((definition.promptGuidelines ?? []).some((line) => GUIDELINE.test(line)), "the bash guideline names the way to keep a process");
 		const result = await (definition.execute as unknown as Execute)("w2", { command: escaping(value) });
-		assert.match(result.content[0]!.text, /started/);
+		ranInTree(result.content[0]!.text);
 		assert.deepEqual(await survivors(value), []);
 	} finally { killMarked(value); }
 });

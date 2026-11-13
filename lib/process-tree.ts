@@ -105,6 +105,11 @@ export function scopeSlice(): string | null {
 	return sliceDir;
 }
 
+/** Whether the probe's result is cached; a failed scope start drops it. */
+export function scopeProbeCached(): boolean {
+	return sliceDir !== undefined;
+}
+
 /** Whether a systemd user scope can hold a call here. */
 export function scopeSupported(): boolean {
 	return scopeSlice() !== null;

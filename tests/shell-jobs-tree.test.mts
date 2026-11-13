@@ -5,6 +5,9 @@
  */
 import { afterEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { scopeSupported } from "../lib/process-tree.ts";
 import { killMarked, marked, marker as mark, survivors } from "./support/process-marks.ts";
 import { cleanup, createFakePi, fire, shellJobs, sleep } from "./support/shell-jobs-harness.mts";
@@ -60,5 +63,34 @@ describe("shell-jobs ends the whole tree", { skip: scope ? false : "no systemd u
 			await fire(app.handlers, "session_shutdown", app.ctx, { reason: "quit" });
 			assert.deepEqual(await survivors(value), []);
 		} finally { killMarked(value); }
+	});
+
+	test("e4. a systemd-run that cannot start the scope still runs the job, in its own group", { timeout: 20_000 }, async () => {
+		const app = await started();
+		const start = app.tools.get("shell_job_start");
+		// A first job makes this module instance probe with the real systemd-run.
+		const probe = await start.execute("p", { command: "true", title: "Probe" }, undefined, undefined, app.ctx);
+		assert.notStrictEqual(probe.isError, true, probe.content[0].text);
+		const dir = mkdtempSync(join(tmpdir(), "tree-fake-systemd-run-"));
+		writeFileSync(join(dir, "systemd-run"), "#!/bin/sh\necho 'Failed to connect to bus: fake' >&2\nexit 1\n");
+		chmodSync(join(dir, "systemd-run"), 0o755);
+		const path = process.env.PATH;
+		process.env.PATH = `${dir}:${path ?? ""}`;
+		try {
+			const result = await start.execute("f", { command: "echo ran-job", title: "Fake" }, undefined, undefined, app.ctx);
+			assert.notStrictEqual(result.isError, true, result.content[0].text);
+			const id = (result.details as { id: string }).id;
+			let text = "";
+			for (let waited = 0; waited < 5000 && !text.includes("ran-job"); waited += 100) {
+				await sleep(100);
+				const logs = await app.tools.get("shell_job").execute("l", { op: "logs", id }, undefined, undefined, app.ctx);
+				text = logs.content.map((c: { text: string }) => c.text).join("\n");
+			}
+			assert.match(text, /ran-job/);
+			assert.doesNotMatch(text, /Failed to connect/);
+		} finally {
+			process.env.PATH = path;
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
