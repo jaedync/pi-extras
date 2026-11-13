@@ -370,7 +370,7 @@ async function startJob(
 				await once(current, "spawn");
 				spawned.started();
 			} catch (error) {
-				failure = error as Error;
+				failure = error instanceof Error ? error : new Error(String(error));
 			}
 			if (failure === undefined && await spawned.begun) {
 				child = current;
@@ -395,7 +395,7 @@ async function startJob(
 				fd = openSync(logPath, "w", 0o600);
 			} catch (error) {
 				discardLog(logPath, null);
-				return errResult(`Could not create the job log: ${(error as Error).message}`);
+				return errResult(`Could not create the job log: ${error instanceof Error ? error.message : String(error)}`);
 			}
 		}
 		if (child === undefined || exitPromise === undefined) {
