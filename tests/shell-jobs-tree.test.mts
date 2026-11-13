@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scopeSupported } from "../lib/process-tree.ts";
@@ -63,6 +63,29 @@ describe("shell-jobs ends the whole tree", { skip: scope ? false : "no systemd u
 			await fire(app.handlers, "session_shutdown", app.ctx, { reason: "quit" });
 			assert.deepEqual(await survivors(value), []);
 		} finally { killMarked(value); }
+	});
+
+	test("e5. PI_TREE_KILL=0 starts a job in its own group, with no scope, as before; the default starts one in a scope", { timeout: 20_000 }, async () => {
+		const app = await started();
+		const start = app.tools.get("shell_job_start");
+		const cgroupOf = async (env: string | undefined) => {
+			const saved = process.env.PI_TREE_KILL;
+			if (env === undefined) delete process.env.PI_TREE_KILL;
+			else process.env.PI_TREE_KILL = env;
+			try {
+				const result = await start.execute(`s-${Math.random()}`, { command: "sleep 5", title: "Switch" }, undefined, undefined, app.ctx);
+				assert.notStrictEqual(result.isError, true, result.content[0].text);
+				const job = result.details as { id: string; pid: number };
+				const text = readFileSync(`/proc/${job.pid}/cgroup`, "utf8");
+				await app.tools.get("shell_job").execute("k", { op: "kill", id: job.id }, undefined, undefined, app.ctx);
+				return text;
+			} finally {
+				if (saved === undefined) delete process.env.PI_TREE_KILL;
+				else process.env.PI_TREE_KILL = saved;
+			}
+		};
+		assert.doesNotMatch(await cgroupOf("0"), /pi-job-/);
+		assert.match(await cgroupOf(undefined), /pi-job-/);
 	});
 
 	test("e4. a systemd-run that cannot start the scope still runs the job, in its own group", { timeout: 20_000 }, async () => {
