@@ -2,6 +2,21 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Added
+
+- Defer Tools: a new extension, off by default. In each request to Meridian
+  it marks the tools named in `deferTools.names` (`pi-extras.json`)
+  `defer_loading: true`, so their declarations leave the prompt and the model
+  loads them through tool search. The README gives a recommended list of 13
+  tools. Turn it on only with a Meridian build that keeps its single-turn
+  limit for sessions with deferred tools: Meridian 1.89.0 removes the limit,
+  and each turn with a tool call then costs one more hidden model turn. Each
+  session keeps the list of its start, so a config edit never rewrites the
+  prompt cache of a running session. `PI_EXTRAS_DEFER_TOOLS=0` turns it off.
+  Requests to other providers do not change.
+
 ## 0.44.2 - 2026-11-13
 
 ### Changed

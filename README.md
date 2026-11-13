@@ -19,7 +19,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all twenty-two extensions (quota hibernation, computer use and auto-update stay off until you opt in); it makes `quiet` available but does not select it. It also adds the skills `be-ambitious`, `code-slop-rules`, `formal-verification`, `implicit-state-machines`, `ui-redline`, `untangle-codebase` and `walkthrough-video` and the prompt templates `/higher` and `/wider`.
+adds all twenty-three extensions (quota hibernation, computer use and auto-update stay off until you opt in); it makes `quiet` available but does not select it. It also adds the skills `be-ambitious`, `code-slop-rules`, `formal-verification`, `implicit-state-machines`, `ui-redline`, `untangle-codebase` and `walkthrough-video` and the prompt templates `/higher` and `/wider`.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -37,6 +37,7 @@ can still conflict.
 | Bash Default Timeout | Adds a 120-second timeout only when a bash or powershell call omitted one |
 | Idle GC | Once the agent has been idle for 30 seconds, one full garbage collection gives the memory of the last run back to the system |
 | Loop Stall | Logs each time Pi stops answering for 500 ms or more, with what held it: main-thread CPU, GC, slow file writes and disk pressure |
+| Defer Tools | Opt-in: requests to a local [Meridian](https://github.com/rynfar/meridian) mark the tools you name `defer_loading`, so their declarations leave the prompt until the model searches for them |
 | Herdr Tab Name | In a [Herdr](https://herdr.dev) tab, keeps the session name and the tab label the same: `/name` renames the tab, and a session with no name takes the tab's label |
 | Kagi Search | Adds `kagi_search` without replacing existing search/fetch tools |
 | Gov Search | `gov_search` tool: free search of the Firecrawl Government & Legal Index (US statutes, regulations, city codes, court opinions, agency guidance), with filters for jurisdiction, court and citation; no key needed |
@@ -324,6 +325,8 @@ child's bash without the sandbox that hides them). The model guide is
   I/O pressure (Linux). CPU time close to the stall means JavaScript or GC
   work; CPU time close to zero means a blocking system call, such as an fsync
   on a busy disk. At 1 MB the log moves to `loop-stall.log.1`.
+- `PI_EXTRAS_DEFER_TOOLS=0`: disable Defer Tools for the run (see
+  [Defer Tools](#defer-tools)).
 - `PI_HERDR_TAB_NAME=off`, or `herdrTabName.enabled: false` in
   `pi-extras.json`: disable Herdr Tab Name. In a Herdr tab with one pane, it
   keeps Pi's session name and the tab's label the same. A session that has a
@@ -1834,6 +1837,58 @@ Such a message gets one more line that tells the model to call that tool from
 a `codemode` script. The line goes into that user message only, so the system
 prompt and the tool list stay the same for the whole session, and the prompt
 cache stays valid. What you type yourself is never changed.
+
+## Defer Tools
+
+Every request declares every active tool, and a declaration costs input tokens
+on every turn. Anthropic's tool search lets a request mark a tool
+`defer_loading: true`. The prompt then does not hold its declaration, and the
+model loads the tool through a search when it needs it. Meridian gives the
+flag to Claude Code's tool search.
+
+Defer Tools adds `defer_loading: true` to the tools that you name, in each
+request to Meridian. A request goes to Meridian when its model uses the
+`anthropic-messages` API and has a Meridian base URL or sends the
+`x-meridian-agent` header. Requests to all other providers do not change.
+
+It is off by default. When a request defers a tool, Meridian removes its
+single-turn limit, and each turn with a tool call then costs one more hidden
+model turn. That cost is larger than the saving. Turn it on only with a
+Meridian build that keeps the single-turn limit for sessions with deferred
+tools. This is the recommended list (tools used in under 5% of sessions):
+
+```json
+{
+  "deferTools": {
+    "names": [
+      "agent_send", "list_peers", "agent_request", "intercom",
+      "artifact_feedback", "artifact_check", "gov_search", "stop_subagent",
+      "get_goal", "create_goal", "propose_goal_draft", "complete_goal",
+      "update_goal_progress"
+    ]
+  }
+}
+```
+
+- `names`: the tools to defer. With no `names`, or `"names": []`, it
+  defers nothing.
+- `meridianBaseUrls`: the base URLs that are Meridian. The default is
+  `["http://127.0.0.1:3456", "http://localhost:3456"]`.
+- `PI_EXTRAS_DEFER_TOOLS=0` turns it off for the run.
+
+A change to the tool list rewrites the whole prompt cache. So each session
+keeps the list that it had at its start. A config edit, or a `/reload`,
+applies only to new sessions. The same request always gives the same bytes,
+so a cache warm repeats the real request.
+
+Some tools are never deferred: `read`, `bash`, `edit`, `write`, `codemode` and
+`powershell`. A tool that already has a `defer_loading` value keeps it. A
+tool with `cache_control` stays loaded, because Anthropic does not accept
+`cache_control` on a deferred tool. When every tool of a request would be
+deferred, the request does not change, because one tool must stay loaded.
+
+A tool that Tool Loadout hides (`toolLoadout.codemodeOnly`) is not in the
+request, so Defer Tools does nothing for it. Subagents do not load Defer Tools.
 
 ## Copy Blocks
 

@@ -1028,6 +1028,15 @@ the time, numbers and the labels of slow synchronous operations, such as
 `subagents index save`; never a path, a task or any content.
 `PI_LOOP_STALL=off` turns it off.
 
+## Defer Tools
+
+Defer Tools is off until `deferTools.names` lists tools. It sends nothing by
+itself and writes no files. It reads the
+`deferTools` section of `pi-extras.json` and `PI_EXTRAS_DEFER_TOOLS` once per
+session. In a request to Meridian it adds `defer_loading: true` to the listed
+tool declarations. It changes nothing else in the request, and it leaves
+requests to other providers as they are.
+
 ## Reporting
 
 Do not open a public issue containing tokens, session links, auth files, raw
