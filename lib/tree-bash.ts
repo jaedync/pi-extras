@@ -1,11 +1,12 @@
 /**
  * tree-bash: the bash operations that pi-extras gives Pi's bash tool, in the
  * main session (Tool Display) and in subagents. They end every process of a
- * call when it ends (lib/process-tree.ts). Windows keeps Pi's own operations,
- * which kill the tree with taskkill.
+ * call when it ends (lib/process-tree.ts). They are on by default on Linux
+ * only (`treeKillOn`); elsewhere Pi's own operations run. PI_TREE_KILL=1 turns
+ * them on elsewhere (not Windows), and PI_TREE_KILL=0 turns them off on Linux.
  */
 import type { BashOperations } from "@earendil-works/pi-coding-agent";
-import { treeShellOperations } from "./process-tree.ts";
+import { treeKillOn, treeShellOperations } from "./process-tree.ts";
 
 /** What these operations take from Pi's SDK: the one Pi runs with, so the shell is found as Pi finds it. */
 export interface BashSdk {
@@ -13,7 +14,7 @@ export interface BashSdk {
 	getShellConfig(customShellPath?: string): { shell: string; args: string[]; commandTransport?: "argv" | "stdin" };
 }
 
-const treeKills = () => process.platform !== "win32";
+const treeKills = () => treeKillOn();
 
 export function treeBashOperations(sdk: BashSdk, shellPath: string | undefined): BashOperations {
 	if (!treeKills()) return sdk.createLocalBashOperations(shellPath ? { shellPath } : undefined);

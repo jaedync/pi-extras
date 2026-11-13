@@ -15,7 +15,6 @@ import { scopeProbeCached, scopeSupported, treeShellOperations, type TreeMode } 
 import { killMarked, marker as mark, survivors } from "./support/process-marks.ts";
 
 const marker = () => mark(4000);
-const linux = process.platform === "linux";
 const SCOPE = scopeSupported();
 const dirs: string[] = [];
 after(() => { for (const dir of dirs) rmSync(dir, { recursive: true, force: true }); });
@@ -36,7 +35,7 @@ async function run(mode: TreeMode, command: string, options: { timeout?: number;
 
 const modes: { mode: TreeMode; skip: string | false }[] = [
 	{ mode: "scope", skip: SCOPE ? false : "no systemd user scope here" },
-	{ mode: "group", skip: linux ? false : "the scan reads /proc" },
+	{ mode: "group", skip: process.platform === "win32" ? "no process groups" : false },
 ];
 
 for (const { mode, skip } of modes) {

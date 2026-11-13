@@ -1,8 +1,10 @@
 /**
  * Marks for the processes of one test: each test runs `sleep <marker>`, a
- * length no other process uses, so a scan of /proc finds its processes only,
+ * length no other process uses, so a scan (of /proc on Linux, of `ps`
+ * elsewhere) finds its processes only,
  * and SIGKILLs them at its end, pass or fail, so a test run cannot leak.
  */
+import { execFileSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { after } from "node:test";
 import { readIfThere, signal } from "../../lib/process-tree.ts";
@@ -18,6 +20,7 @@ export function marker(base: number): string {
 
 /** Live (not zombie) processes whose command line holds the marker. */
 export function marked(value: string): number[] {
+	if (process.platform !== "linux") return psMarked(value);
 	return readdirSync("/proc").filter((name) => /^\d+$/.test(name) && Number(name) !== process.pid).filter((name) => {
 		const cmdline = readIfThere(`/proc/${name}/cmdline`);
 		const stat = readIfThere(`/proc/${name}/stat`);
@@ -40,4 +43,14 @@ export async function survivors(value: string, waitMs = 1500): Promise<number[]>
 
 export function killMarked(value: string): void {
 	for (const pid of marked(value)) signal(pid, "SIGKILL");
+}
+
+/** The same scan with `ps`, where there is no /proc (macOS). */
+function psMarked(value: string): number[] {
+	const text = execFileSync("ps", ["-axo", "pid=,stat=,command="], { encoding: "utf8", timeout: 5000 });
+	return text.split("\n").flatMap((line) => {
+		const match = /^\s*(\d+)\s+(\S+)\s+(.*)$/.exec(line);
+		if (!match || Number(match[1]) === process.pid || match[2]!.startsWith("Z")) return [];
+		return match[3]!.split(/\s+/).some((arg) => arg.includes(value)) ? [Number(match[1])] : [];
+	});
 }

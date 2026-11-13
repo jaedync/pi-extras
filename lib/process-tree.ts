@@ -39,6 +39,19 @@ export interface TreeOptions {
 	readonly mode?: TreeMode;
 }
 
+/**
+ * Whether pi-extras gives bash and shell-jobs these tree operations. On by
+ * default on Linux only; elsewhere Pi's own operations run, as before.
+ * PI_TREE_KILL=1 turns them on elsewhere (for a test on macOS; never on
+ * Windows, which has no process groups). PI_TREE_KILL=0 turns them off on Linux.
+ */
+export function treeKillOn(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): boolean {
+	if (platform === "win32") return false;
+	if (env.PI_TREE_KILL === "1") return true;
+	if (env.PI_TREE_KILL === "0") return false;
+	return platform === "linux";
+}
+
 export const TREE_GRACE_MS = 3000;
 /** How long the kill waits for SIGKILLed processes to go. */
 const KILL_WAIT_MS = 2000;

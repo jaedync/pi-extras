@@ -69,7 +69,7 @@ import {
 } from "../lib/shell-jobs-process.ts";
 import { acknowledgeCompletion, attachDelivery, COMPLETION_CUSTOM_TYPE, noteRunStart, reconcileDeliveries, settleDeliveries } from "../lib/shell-jobs-delivery.ts";
 import { jobEnv, type Launch, launchArgs, type SessionFacts, withExitFile } from "../lib/shell-jobs-launch.ts";
-import { forgetScopeProbe, newScope, scopeStarted } from "../lib/process-tree.ts";
+import { forgetScopeProbe, newScope, scopeStarted, treeKillOn } from "../lib/process-tree.ts";
 import { buildHandover, claimForSession, type Ending, firstLook, jobsFromHandover, mayStop, startIdentity, stopAdoptPoll, sweepHandovers, watchAdopted } from "../lib/shell-jobs-adopt.ts";
 import { type Handover, writeHandover } from "../lib/shell-jobs-handover.ts";
 import { restartPending } from "../lib/restart-intent.ts";
@@ -349,7 +349,8 @@ async function startJob(
 		let child: ReturnType<typeof spawn> | undefined;
 		let exitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | undefined;
 		// In a scope first. When systemd-run cannot start one, the job runs in its own group, as before scopes.
-		for (const inScope of [true, false]) {
+		// Off (PI_TREE_KILL=0, or not Linux): the job's own group only, as before scopes.
+		for (const inScope of treeKillOn() ? [true, false] : [false]) {
 			let spawned: SpawnedJob;
 			try {
 				spawned = spawnJob(jobLaunch, cwd, fd, id, inScope);

@@ -9,6 +9,7 @@ import type { AgentSession, ExtensionError } from "@earendil-works/pi-coding-age
 
 import { agentRoot } from "./support/pi-runtime.mjs";
 import { TREE_GUIDELINE } from "../lib/tree-bash.ts";
+import { treeKillOn } from "../lib/process-tree.ts";
 const scratch = mkdtempSync(join(tmpdir(), "tool-display-sdk-"));
 // Set before importing the SDK. This test must never read real settings or credentials.
 process.env.HOME = scratch;
@@ -74,7 +75,7 @@ test("in the terminal UI the built-in tools gain the new rows and nothing the ag
 		assert.deepEqual(errors, []);
 		const after = withoutTreeGuideline(snapshot(session));
 		// The one change: bash says that its background processes end with the call.
-		assert.equal(process.platform === "win32" ? 0 : 1, after.count);
+		assert.equal(treeKillOn() ? 1 : 0, after.count);
 		assert.deepEqual(after.seen, before);
 		// grep, find and ls stay off, as they were.
 		assert.deepEqual(session.getActiveToolNames().filter((name) => ["grep", "find", "ls"].includes(name)), []);

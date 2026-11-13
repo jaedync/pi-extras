@@ -12,7 +12,9 @@ const runTmp = runTmpDir();
 // Keep real account state and tokens outside every test process.
 const env = { PATH: process.env.PATH, HOME: home, TMPDIR: runTmp,
   PI_CODING_AGENT_DIR: join(home, 'agent'), PI_OFFLINE: '1', PI_TELEMETRY: '0',
-  STATUSLINE_TZ: 'America/Chicago', TZ: 'UTC', CI: 'true' };
+  STATUSLINE_TZ: 'America/Chicago', TZ: 'UTC', CI: 'true',
+  // The bash and shell-jobs tree switch (lib/process-tree.ts treeKillOn), so a run can test it on or off.
+  ...(process.env.PI_TREE_KILL === undefined ? {} : { PI_TREE_KILL: process.env.PI_TREE_KILL }) };
 try {
   // lint:slop first: it takes under a second and names a new slop site before the long suites run.
   for (const command of ['lint:slop', 'test:unit', 'test:kagi']) {

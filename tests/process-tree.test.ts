@@ -13,7 +13,6 @@ import { killMarked, marker as mark, survivors } from "./support/process-marks.t
 
 const marker = () => mark(1000);
 
-const linux = process.platform === "linux";
 const GRACE_MS = 300;
 const SCOPE = scopeSupported();
 
@@ -36,7 +35,7 @@ async function run(mode: TreeMode, command: string, timeout?: number, signal?: A
 
 const modes: { mode: TreeMode; skip: string | false }[] = [
 	{ mode: "scope", skip: SCOPE ? false : "no systemd user scope here" },
-	{ mode: "group", skip: linux ? false : "the scan reads /proc" },
+	{ mode: "group", skip: process.platform === "win32" ? "no process groups" : false },
 ];
 
 for (const { mode, skip } of modes) {
