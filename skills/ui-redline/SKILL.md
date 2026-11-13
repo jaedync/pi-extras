@@ -1,6 +1,6 @@
 ---
 name: ui-redline
-description: Find and fix the signs of generated-looking UI in a web screen (hue gradients, glows, gradient text, emoji icons, tracked caps, hype copy, off-grid spacing, low contrast, looping animation, missing focus states), with a measured audit before and after and an independent review. Use when the user asks to redline, de-slop, unslop, polish or clean up a screen so it stops looking AI-generated, asks for a design-quality audit of a page, runs /skill:ui-redline, or when a screen shows those signs.
+description: Find and fix the signs of generated-looking UI in a web screen (hue gradients, glows, gradient text, emoji icons, tracked caps, hype copy, off-grid spacing, low contrast, looping motion, no focus states), with a measured audit and an independent review, on anything Chromium renders (React, Vue, Svelte, Tailwind, plain HTML, a live URL). Use when the user asks to redline, de-slop, unslop, polish or clean up a screen to stop it looking AI-generated, asks for a design-quality audit of a page, runs /skill:ui-redline, or when a screen shows those signs.
 ---
 
 # Redline a screen

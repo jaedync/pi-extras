@@ -1,6 +1,6 @@
 ---
 name: code-slop-rules
-description: Turn the sloppy code patterns that a repository has (swallowed errors, empty catch blocks, `.catch(() => {})`, `as any`, `as never`, `as unknown as`, non-null `!`, ts-ignore, eslint-disable, type-ignore, noqa, bare except, fixed sleeps, empty default branches, "for now" and workaround comments) into tested ast-grep rules and a ratchet that fails when a count goes up. Use when the user asks for slop rules, ast-grep rules, a lint ratchet, deterministic checks instead of review rounds, or to stop agents adding sloppy code, or runs /skill:code-slop-rules.
+description: Turn the sloppy code patterns that a repository has (swallowed errors, empty catch blocks, `.catch(() => {})`, `as any`, `as never`, `as unknown as`, non-null `!`, ts-ignore, eslint-disable, type-ignore, noqa, bare and empty Python except blocks, fixed sleeps, empty default branches, "for now" and workaround comments) into tested ast-grep rules and a ratchet. Use when the user asks for slop rules, ast-grep rules, a lint ratchet, deterministic checks in place of review rounds, or to stop agents adding sloppy code, or runs /skill:code-slop-rules.
 ---
 
 # Code slop rules
