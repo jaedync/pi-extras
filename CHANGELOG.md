@@ -2,6 +2,27 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.44.2 - 2026-11-13
+
+### Changed
+
+- Subagents: the `subagent` tool description now stays within 4,096
+  characters, with room for the line that Pi adds for `codemode`. Claude
+  Code, which Meridian runs, cuts a tool description at that length, so
+  sessions lost the end of the model guide, where the bans often were. A
+  guide that does not fit is now cut before its last whole bullet, with a
+  note, and its file path comes first. A long model table is cut so the
+  guide keeps room for its first rules. Model lines now read
+  `- anthropic/claude-opus-5-5: high`, without the display name.
+- Tool Loadout: a message that another extension sends, for example a
+  `/goal` prompt of pi-agent-goal, gets one more line when it names a tool
+  in `toolLoadout.codemodeOnly`. The line says how to call that tool from
+  `codemode`. Only that new message changes: the system prompt and the tool
+  list stay the same for the whole session. Typed input is never changed.
+- Skills: the descriptions of the bundled skills are shorter (two sentences
+  each, at most 560 characters), so every session prompt is about 1,100
+  characters smaller. They keep their trigger phrases and `/skill:` names.
+
 ## 0.44.1 - 2026-11-12
 
 ### Fixed
