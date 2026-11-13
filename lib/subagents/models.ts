@@ -95,6 +95,6 @@ export function thinkingFor(choice: ModelChoice, perCall: Thinking | undefined, 
 export function modelTable(allowed: readonly ModelChoice[], settings: ThinkingSettings): string {
 	return allowed.map((choice) => {
 		const thinking = thinkingFor(choice, undefined, settings);
-		return `- ${choice.ref}${thinking ? `, thinking ${thinking}` : ""}`;
+		return `- ${choice.ref}${thinking ? `: ${thinking}` : ""}`;
 	}).join("\n");
 }

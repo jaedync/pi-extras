@@ -103,7 +103,8 @@ export function guideSummary(text: string, path: string): string | null {
 	const after = text.slice(match.index + match[0].length);
 	const end = after.search(/^## /m);
 	const body = (end === -1 ? after : after.slice(0, end)).trim();
-	return body.length === 0 ? null : `${body}\n(Summary of ${path}; read the file before a choice that the summary does not settle.)`;
+	// The pointer comes first: a description that is too long loses its end (subagents/describe.ts).
+	return body.length === 0 ? null : `(Summary of ${path}; read the file before a choice that the summary does not settle.)\n${body}`;
 }
 
 function readCapped(path: string): string | null {

@@ -64,9 +64,9 @@ test("model table lists each model ref with its effective thinking level; displa
 	const allowed = allowedModels(scoped, opus);
 	const table = modelTable(allowed, { modelThinkingLevels: { "openai-codex/gpt-6.1-sol": "high" }, defaultThinkingLevel: "medium" });
 	assert.equal(table, [
-		"- anthropic/claude-opus-5-5, thinking medium",
-		"- anthropic/claude-fable-5-1, thinking medium",
-		"- openai-codex/gpt-6-luna, thinking low",
-		"- openai-codex/gpt-6.1-sol, thinking high",
+		"- anthropic/claude-opus-5-5: medium",
+		"- anthropic/claude-fable-5-1: medium",
+		"- openai-codex/gpt-6-luna: low",
+		"- openai-codex/gpt-6.1-sol: high",
 	].join("\n"));
 });

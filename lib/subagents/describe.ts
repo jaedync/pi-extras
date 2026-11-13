@@ -17,18 +17,42 @@ export const DESCRIPTION_MAX_CHARS = 4_096;
  */
 export const PI_SUFFIX_RESERVE = 100;
 const GUIDE_HEADING = "The user's notes on which model suits which work:";
-const GUIDE_CUT_NOTE = "\n(notes cut to fit; read the guide file for the rest)";
+const GUIDE_CUT_NOTE = "\n(notes cut to fit; read the guide file named above for the rest)";
+const MODELS_HEADING = "Models (and the thinking level each gets unless you pass one):";
+/** A model table never takes the room of the guide's first lines, where the bans go. */
+const MIN_GUIDE_ROOM = 800;
 
+/** `text` cut to at most `max` characters, never inside a surrogate pair. */
+function sliceSafe(text: string, max: number): string {
+	const cut = text.slice(0, Math.max(0, max));
+	return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
+}
+
+/** The guide within `room`: cut before the last whole bullet that fits, else at a line end, with a note. */
 function fitGuide(guide: string, room: number): string {
 	if (guide.length <= room) return guide;
-	const keep = Math.max(0, room - GUIDE_CUT_NOTE.length);
-	const cut = guide.slice(0, keep);
-	const lineEnd = cut.lastIndexOf("\n");
-	return `${lineEnd > 0 ? cut.slice(0, lineEnd) : cut}${GUIDE_CUT_NOTE}`;
+	const cut = sliceSafe(guide, room - GUIDE_CUT_NOTE.length);
+	const bullet = cut.lastIndexOf("\n- ");
+	const line = cut.lastIndexOf("\n");
+	const end = bullet > 0 ? bullet : line > 0 ? line : cut.length;
+	return `${cut.slice(0, end)}${GUIDE_CUT_NOTE}`;
+}
+
+/** The model table within `room`, cut at a line end with the count of models left out. */
+function fitModels(models: string, room: number): string {
+	if (models.length <= room) return models;
+	const lines = models.split("\n");
+	const kept: string[] = [];
+	for (const line of lines) {
+		const note = `(${lines.length - kept.length - 1} more models in scope; any of them can be named)`;
+		if ([...kept, line, note].join("\n").length > room) break;
+		kept.push(line);
+	}
+	return [...kept, `(${lines.length - kept.length} more models in scope; any of them can be named)`].join("\n");
 }
 
 export function subagentDescription(options: { models: string; defaultModel: string | null; guide: string; forChild: boolean }): string {
-	const lines = [
+	const intro = [
 		"Start a subagent: a separate Pi session on the model you choose, with a fresh context and similar tools. It runs in the background and its report reaches you as a message when it finishes; meanwhile keep working or end your turn. Pass wait: true only for a short check whose answer you need before your next step.",
 		"",
 		"Delegate bounded work that benefits from its own context, a different model's strengths, or an independent second opinion. Do it yourself when a few tool calls would. Start several at once only for truly independent work.",
@@ -43,14 +67,15 @@ export function subagentDescription(options: { models: string; defaultModel: str
 			? "Its report arrives as a message to you. You are not done until your subagents have reported."
 			: "Talk to a running or finished subagent with message. For a review or fix loop, tell the agents to message each other by name and report to you only at the end, so you are not woken for each round.",
 		"",
-		"Models (and the thinking level each gets unless you pass one):",
-		options.models || "(none)",
 	];
-	if (options.defaultModel) lines.push(`Default when you name none: ${options.defaultModel}.`);
-	const head = lines.join("\n");
 	const guide = options.guide.trim();
+	const tail = options.defaultModel ? `\nDefault when you name none: ${options.defaultModel}.` : "";
+	const limit = DESCRIPTION_MAX_CHARS - PI_SUFFIX_RESERVE;
+	const fixedLength = intro.join("\n").length + MODELS_HEADING.length + tail.length + 2;
+	const modelRoom = limit - fixedLength - (guide ? MIN_GUIDE_ROOM : 0);
+	const head = [...intro, MODELS_HEADING, fitModels(options.models || "(none)", modelRoom)].join("\n") + tail;
 	if (!guide) return head;
-	const room = DESCRIPTION_MAX_CHARS - PI_SUFFIX_RESERVE - head.length - GUIDE_HEADING.length - 3;
+	const room = limit - head.length - GUIDE_HEADING.length - 3;
 	return room <= GUIDE_CUT_NOTE.length ? head : `${head}\n\n${GUIDE_HEADING}\n${fitGuide(guide, room)}`;
 }
 

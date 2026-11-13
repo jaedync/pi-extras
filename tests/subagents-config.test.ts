@@ -57,7 +57,7 @@ test("a guide with a Summary section contributes only that section and names the
 		const file = join(agentDir, "subagent-models.md");
 		writeFileSync(file, "# Guide\n\nIntro.\n\n## Summary\n\n- luna: cheap\n- never sol\n\n## Evidence\n\n" + "long history ".repeat(500) + "\n");
 		const guide = readGuide(agentDir, cwd, true);
-		assert.equal(guide.text, `- luna: cheap\n- never sol\n(Summary of ${file}; read the file before a choice that the summary does not settle.)`);
+		assert.equal(guide.text, `(Summary of ${file}; read the file before a choice that the summary does not settle.)\n- luna: cheap\n- never sol`, "the pointer comes first, so a cut at the end keeps it");
 		assert.deepEqual(guide.sources, [file]);
 		writeFileSync(file, "## Summary\n\n\n## Evidence\n- luna: cheap\n");
 		assert.equal(readGuide(agentDir, cwd, true).text, "## Summary\n\n\n## Evidence\n- luna: cheap", "an empty Summary falls back to the whole file");

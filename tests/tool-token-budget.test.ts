@@ -14,7 +14,7 @@ const CHARS_PER_TOKEN = 2.75;
 const tokens = (description: string, parameters: unknown): number =>
 	Math.round(JSON.stringify({ name: "tool", description, input_schema: parameters }).length / CHARS_PER_TOKEN);
 
-const MODEL_LINE = "- anthropic/claude-opus-5-5, thinking high\n";
+const MODEL_LINE = "- anthropic/claude-opus-5-5: high\n";
 const GUIDE = "- a model note of about one line, as a guide's Summary section has them.\n".repeat(15);
 
 test("subagent stays within its token budget with a summary-sized guide and 11 models", () => {
@@ -50,4 +50,27 @@ test("the subagent description's fixed text stays within 2,100 characters", () =
 	const description = subagentDescription({ models: MODEL_LINE.repeat(12).trim(), defaultModel: "anthropic/claude-opus-5-5", guide, forChild: false });
 	const fixed = description.length - guide.length - MODEL_LINE.repeat(12).trim().length;
 	assert.ok(fixed <= 2_100, `the fixed text uses ${fixed} characters; budget 2100`);
+});
+
+const POINTER = "(Summary of /home/u/.pi/agent/subagent-models.md; read the file before a choice that the summary does not settle.)";
+const bulletGuide = (count: number) => [POINTER, "- Never use model-x.", ...Array.from({ length: count }, (_, i) => `- rule ${i}: a note about which model suits which work,\n  continued on a second line of the same bullet.`)].join("\n");
+
+test("a cut guide keeps the path to its file and ends at a whole bullet", () => {
+	const description = subagentDescription({ models: MODEL_LINE.repeat(12).trim(), defaultModel: "anthropic/claude-opus-5-5", guide: bulletGuide(60), forChild: false });
+	assert.ok(description.includes(POINTER), "the pointer to the file survives the cut");
+	const notes = description.slice(description.indexOf("- Never use model-x."));
+	const beforeNote = notes.slice(0, notes.lastIndexOf("\n(notes cut"));
+	assert.match(beforeNote, /continued on a second line of the same bullet\.$/, "the last bullet is whole");
+});
+
+test("a long model table is cut so the guide's first bullets, where the bans go, still fit", () => {
+	const description = subagentDescription({ models: MODEL_LINE.repeat(80).trim(), defaultModel: "anthropic/claude-opus-5-5", guide: bulletGuide(5), forChild: false });
+	assert.ok(description.length <= DESCRIPTION_MAX_CHARS - PI_SUFFIX_RESERVE, `${description.length} characters`);
+	assert.match(description, /- Never use model-x\./);
+	assert.match(description, /more models in scope/);
+});
+
+test("a cut never splits a character into a lone surrogate", () => {
+	const description = subagentDescription({ models: MODEL_LINE.trim(), defaultModel: null, guide: "\u{1F600}".repeat(3_000), forChild: false });
+	assert.doesNotMatch(description, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
 });
