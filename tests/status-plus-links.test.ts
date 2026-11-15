@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { copiedNotice, copyFailedNotice, isRemoteSession, keepLinkCopy, linkCopier, readCopyLinks, type LinkCopyDeps } from "../lib/status-plus-links.ts";
+import { copiedNotice, copyFailedNotice, isRemoteSession, keepLinkCopy, linkCopier, linkOpener, macOpenArgs, readCopyLinks, readOpenLinksOn, type LinkCopyDeps } from "../lib/status-plus-links.ts";
 import { Text } from "@earendil-works/pi-tui";
 import { fullscreen } from "./support/fullscreen.ts";
 import { liveTuiReference, tuiReference } from "./support/tui-reference.ts";
@@ -156,4 +156,64 @@ test("statusPlus.copyLinks: false turns link copy off; anything else keeps it on
 	assert.equal(readCopyLinks(file), true);
 	writeFileSync(file, "{ not json");
 	assert.equal(readCopyLinks(file), true);
+});
+
+test("the Mac to open links on is an SSH host name from pi-extras.json, or none", () => {
+	const dir = mkdtempSync(join(tmpdir(), "open-on-"));
+	try {
+		const file = join(dir, "pi-extras.json");
+		for (const [value, want] of [["mac", "mac"], ["mac-mini.local", "mac-mini.local"], ["", undefined], ["-oProxyCommand=x", undefined], ["a b", undefined], [7, undefined]] as const) {
+			writeFileSync(file, JSON.stringify({ statusPlus: { openLinksOn: value } }));
+			assert.equal(readOpenLinksOn(file), want, String(value));
+		}
+		writeFileSync(file, "{}");
+		assert.equal(readOpenLinksOn(file), undefined);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a link opens on the Mac with ssh: one quoted argument that its shell cannot run", () => {
+	assert.deepEqual(macOpenArgs("mac", "https://inbox.example/#abc"),
+		["-n", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "ClearAllForwardings=yes", "--", "mac", "open", "-u", "'https://inbox.example/#abc'"]);
+	// The remote shell reads the command line: a quote, $() or ; in the link stays text.
+	const odd = macOpenArgs("mac", "https://x.example/a'b$(touch%20/tmp/p);c")!;
+	assert.equal(odd.at(-1), `'https://x.example/a'\\''b$(touch%20/tmp/p);c'`);
+	// A link that the parser would change on the way (a tab, a newline, a backslash, a space)
+	// reads as one place and opens another: it is copied, not opened. So is a very long one.
+	for (const url of ["https://good.example\t.evil.example/", "https:\\\\evil.example", "https://x.example/a b", "https://x.example/" + "a".repeat(9000)]) {
+		assert.equal(macOpenArgs("mac", url), undefined, url.slice(0, 40));
+	}
+	for (const url of ["file:///etc/passwd", "javascript:alert(1)", "ssh://x", "not a url"]) assert.equal(macOpenArgs("mac", url), undefined, url);
+	assert.equal(macOpenArgs("-oProxyCommand=x", "https://x.example/"), undefined);
+	// What the parser lets through is plain ASCII: a newline, a control character, a space or
+	// a look-alike letter never reaches the remote shell as itself.
+	for (const url of ["https://x.example/a\nb", "https://x.example/a\u0007b", "https://x.example/a b", "https://аpple.example/", "https://x.example/\u202eb"]) {
+		const args = macOpenArgs("mac", url);
+		if (args) assert.match(args.at(-1)!, /^'https:\/\/[\x21-\x7e]+'$/, url);
+	}
+	assert.equal(macOpenArgs("mac", " -n https://x.example/"), undefined);
+	assert.equal(macOpenArgs("mac", "--args https://x.example/"), undefined);
+});
+
+test("a click opens the link on the Mac, and a failure copies it as before", async () => {
+	const ran: string[][] = [];
+	const { deps, notes, copied } = recorder(async () => undefined);
+	const opener = linkOpener({ ...deps, run: async (args) => { ran.push(args); } }, "mac");
+	await opener.openUrl("https://inbox.example/#abc");
+	assert.equal(ran.length, 1);
+	assert.deepEqual(copied, []);
+	assert.deepEqual(notes, [["info", "Opened on mac: https://inbox.example/#abc"]]);
+
+	const failing = recorder(async () => undefined);
+	const broken = linkOpener({ ...failing.deps, run: async () => { throw new Error("ssh: connect timed out"); } }, "mac");
+	await broken.openUrl("https://inbox.example/#abc");
+	assert.deepEqual(failing.copied, ["https://inbox.example/#abc"]);
+	assert.deepEqual(failing.notes, [["info", "Could not open it on mac (ssh: connect timed out). Copied link: https://inbox.example/#abc"]]);
+
+	const other = recorder(async () => undefined);
+	const never = linkOpener({ ...other.deps, run: async () => { throw new Error("must not run"); } }, "mac");
+	await never.openUrl("file:///etc/passwd");
+	assert.deepEqual(other.copied, ["file:///etc/passwd"]);
+	assert.deepEqual(other.notes, [["info", "Copied link: file:///etc/passwd"]]);
 });

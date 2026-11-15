@@ -21,7 +21,7 @@ import { errorText, operationalError, operationalLine } from "../lib/operational
 import { truncateToWidth, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { CHAIN_EVENT } from "../lib/chain/run.ts";
 import { footerLayout, STATUS_CLICK_EVENT, statusKeyAt, type FooterModel, type FooterRow, type Span, type StatusRow } from "../lib/status-plus-footer.ts";
-import { isRemoteSession, keepLinkCopy, linkCopier, readCopyLinks, type LinkCopier } from "../lib/status-plus-links.ts";
+import { isRemoteSession, keepLinkCopy, linkCopier, linkOpener, readCopyLinks, readOpenLinksOn, runSsh, type LinkCopier } from "../lib/status-plus-links.ts";
 import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../lib/tool-count.ts";
 import { disagreementText, disagreements, markUnsampled, mergePolled, windowName } from "../lib/limit-merge.ts";
 import { isVirtualModel, routedModel } from "../lib/routed-model.ts";
@@ -737,11 +737,14 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		latestCtx = ctx;
 		liveChains.clear();
 		toolCount = readToolCount();
-		linkCopy = isRemoteSession(process.env) && readCopyLinks() ? linkCopier({
+		const linkDeps = {
 			copy: copyToClipboard,
-			notify: (message, type) => ctx.ui.notify(message, type),
-			report: (error) => operationalError(LOG_FILE, "status-plus", `link notice failed: ${errorText(error)}`),
-		}) : undefined;
+			notify: (message: string, type: "info" | "warning") => ctx.ui.notify(message, type),
+			report: (error: unknown) => operationalError(LOG_FILE, "status-plus", `link notice failed: ${errorText(error)}`),
+		};
+		const openOn = isRemoteSession(process.env) ? readOpenLinksOn() : undefined;
+		linkCopy = openOn ? linkOpener({ ...linkDeps, run: (args) => runSsh(args) }, openOn)
+			: isRemoteSession(process.env) && readCopyLinks() ? linkCopier(linkDeps) : undefined;
 		providerLimits.setRefresher(async (provider, force) => {
 			if (latestCtx) await refreshProviderLimits(provider, latestCtx, force);
 		});

@@ -368,6 +368,9 @@ child's bash without the sandbox that hides them). The model guide is
   switched by clicking the footer's tool count or with `/tool-display count`.
 - `statusPlus.copyLinks` in `pi-extras.json`: `false` stops the link copy in a
   remote session (default `true`). See [Status Plus](#status-plus).
+- `statusPlus.openLinksOn` in `pi-extras.json`: the SSH host of the Mac in
+  front of you (for example `"mac"`). In a remote session, a click on a link
+  then opens it in that Mac's browser. See [Status Plus](#status-plus).
 - `releaseNotes.seen` in `pi-extras.json`: the last pi-extras version whose
   notes were shown.
 - `KAGI_TOKEN_FILE`: path to your own subscription session credential. See below.
@@ -512,6 +515,13 @@ session, Status Plus copies the link and shows `Copied link: <url>`.
 - A local session opens links as Pi does.
 - To turn this off, set `statusPlus.copyLinks` to `false` in `pi-extras.json`,
   then use `/reload`.
+- To open links in your Mac's browser instead, set `statusPlus.openLinksOn` to
+  the SSH host name of the Mac (for example `"mac"`), then start a new session.
+  A click then runs `ssh <host> open -u <link>` with no local shell. The machine
+  that runs Pi must reach the Mac with a key and no prompt (`BatchMode=yes`).
+  Only `http` and `https` links of plain URL characters (at most 8 KiB) open;
+  the link goes to the Mac's shell as one quoted word. When the open fails, the link is copied as before, and the
+  notice says why.
 
 ## Tab Status
 
