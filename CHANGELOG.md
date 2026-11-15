@@ -2,6 +2,18 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.45.1 - 2026-11-15
+
+### Added
+
+- Status Plus: `statusPlus.openLinksOn` in `pi-extras.json` names the SSH
+  host of the Mac in front of you. In a remote session, a click on a link
+  then opens it in that Mac's browser (`ssh <host> open -u '<link>'`, with
+  no local shell) instead of only copying it. Only `http` and `https` links
+  of plain URL characters, at most 8 KiB, open; the link goes to the Mac's
+  shell as one quoted word. When the open fails, the link is copied as
+  before, and the notice says why. Unset, nothing changes.
+
 ## 0.45.0 - 2026-11-13
 
 ### Added
