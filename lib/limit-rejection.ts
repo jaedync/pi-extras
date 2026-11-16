@@ -2,11 +2,31 @@ import type { LimitEntry } from "./status-plus-logic.ts";
 
 const RESET_DRIFT_MS = 10 * 60_000;
 const NEAR_FULL_PCT = 95;
+/** A rejected near-full window that then reads this many points lower in the same cycle had a granted reset. */
+const GRANTED_DROP_PCT = 50;
 
 interface Rejection {
 	evidenceAtMs: number;
 	resetMs?: number;
+	/** The window's percent when the rejection was seen, when it gave one. */
+	pct?: number;
 	cleared: boolean;
+}
+
+function knownPct(entry: LimitEntry): number | undefined {
+	return entry.noPercent !== true && entry.usedPct !== undefined && Number.isFinite(entry.usedPct) ? entry.usedPct : undefined;
+}
+
+/**
+ * A granted reset keeps the reset time and empties the window, while a proxy
+ * can still repeat its last rejection: a near-full rejection that reads far
+ * lower in the same cycle is no longer evidence of a block.
+ */
+function grantedReset(prior: Rejection, entry: LimitEntry): boolean {
+	const pct = knownPct(entry);
+	if (prior.pct === undefined || pct === undefined || prior.pct < NEAR_FULL_PCT) return false;
+	if (prior.resetMs === undefined || entry.resetMs === undefined || Math.abs(entry.resetMs - prior.resetMs) > RESET_DRIFT_MS) return false;
+	return pct <= prior.pct - GRANTED_DROP_PCT;
 }
 
 /** Reconcile only proxy status. Other providers can accept requests against paid overage. */
@@ -21,7 +41,9 @@ export function createRejectionTracker() {
 			const prior = rejections.get(key);
 			if (!prior || atMs < prior.evidenceAtMs || (accepted && atMs === prior.evidenceAtMs)) continue;
 			// An actual quota error is newer than a prior success, even if the quota poll is cached.
-			rejections.set(key, accepted ? { ...prior, evidenceAtMs: atMs, cleared: true } : { evidenceAtMs: atMs, resetMs: entry.resetMs, cleared: false });
+			rejections.set(key, accepted
+				? { ...prior, evidenceAtMs: atMs, cleared: true }
+				: { evidenceAtMs: atMs, resetMs: entry.resetMs, pct: knownPct(entry), cleared: false });
 		}
 	}
 	return {
@@ -32,13 +54,13 @@ export function createRejectionTracker() {
 					rejections.delete(key);
 					return { ...entry };
 				}
-				const prior = rejections.get(key) ?? { evidenceAtMs: now, resetMs: entry.resetMs, cleared: false };
+				const prior = rejections.get(key) ?? { evidenceAtMs: now, resetMs: entry.resetMs, pct: knownPct(entry), cleared: false };
 				const rollover = prior.resetMs !== undefined && entry.resetMs !== undefined &&
 					prior.resetMs <= now && entry.resetMs - prior.resetMs > RESET_DRIFT_MS;
-				const cleared = prior.cleared || rollover;
+				const cleared = prior.cleared || rollover || grantedReset(prior, entry);
 				rejections.set(key, { ...prior, cleared, evidenceAtMs: rollover ? Math.max(now, prior.evidenceAtMs) : prior.evidenceAtMs });
 				// A proxy can refresh utilization and reset time but retain its last rejection.
-				// New-cycle or successful-response evidence ends that rejection, not a low percentage alone.
+				// New-cycle, granted-reset or successful-response evidence ends that rejection, not a low percentage alone.
 				// Keep near-full buckets blocked because the new window can also genuinely be exhausted.
 				// An inferred 100% (a rejection that gave no percent) says nothing about how full the window is.
 				const headroom = entry.noPercent === true || (entry.usedPct !== undefined && Number.isFinite(entry.usedPct) && entry.usedPct < NEAR_FULL_PCT);

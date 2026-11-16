@@ -303,6 +303,53 @@ function finalFired(
 	return alreadyFired(fired, provider, entry, top, reason) || alreadyFired(fired, provider, entry, 100, "exhausted");
 }
 
+/**
+ * A provider-block warning needs a reading or a quota rejection at most this
+ * old, and an older final warning first asks for a forced poll. A granted
+ * reset keeps the window's reset time, so nothing but a newer reading shows
+ * it: a proxy can serve a reading from before the grant for minutes after it.
+ */
+export const FRESH_EVIDENCE_MS = 60_000;
+
+/**
+ * A fired warning arms again when its window reads this many points below the
+ * reading that fired it, in the same cycle. Usage only falls that far within a
+ * cycle at a granted reset; a block at a low percent (a rejection) never re-arms.
+ */
+export const REARM_DROP_PCT = 50;
+
+/** True when a fired key names this window and a reset within tolerance of the entry's. */
+function keyNamesCycle(key: string, provider: string, entry: LimitEntry): boolean {
+	const windowPrefix = `${provider}|${entry.key ?? entry.label}|`;
+	if (!key.startsWith(windowPrefix)) return false;
+	const tail = key.slice(key.lastIndexOf("|") + 1);
+	if (tail === "none" || entry.resetMs === undefined) return tail === "none" && entry.resetMs === undefined;
+	const firedReset = Number(tail);
+	return Number.isFinite(firedReset) && Math.abs(firedReset - entry.resetMs) <= CYCLE_TOLERANCE_MS;
+}
+
+/**
+ * Fired keys whose window, in the same reset cycle, now reads at least
+ * REARM_DROP_PCT below the percent that fired them: a granted reset. `fired`
+ * maps each key to that percent; keys without one never re-arm.
+ */
+export function rearmableKeys(
+	snapshots: Iterable<[string, LimitSnapshot]>,
+	model: ActiveModel,
+	fired: ReadonlyMap<string, number | undefined>,
+	now: number,
+): string[] {
+	const keys: string[] = [];
+	for (const { provider, entry } of activeWindows(snapshots, model, now)) {
+		if (entry.approximate || entry.exhausted || entry.usedPct === undefined) continue;
+		for (const [key, firedPct] of fired) {
+			if (firedPct === undefined || !keyNamesCycle(key, provider, entry)) continue;
+			if (entry.usedPct <= firedPct - REARM_DROP_PCT) keys.push(key);
+		}
+	}
+	return keys;
+}
+
 /** Threshold crossings not yet announced this cycle, for the active provider only. */
 export function pendingWarnings(
 	snapshots: Iterable<[string, LimitSnapshot]>,

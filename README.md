@@ -1027,8 +1027,22 @@ a window, because requests stop at the cap.
   days away or a session budget asks for a clean checkpoint and a summary. A
   model-scoped window notes that other models are unaffected. Fired keys and the budget persist with the
   session, so a resumed session does not repeat them.
+- A granted (banked) reset empties a window but keeps its reset time, and a
+  proxy can serve a reading from before it for minutes. So before a final
+  warning (a provider block, the top band, a session budget) from a reading
+  sampled more than 60 s ago enters a request, Usage Guard asks for one
+  forced poll (at most once a minute per provider, within the 2 s poll
+  budget). A provider block also needs that fresh evidence: a reading sampled,
+  or a quota rejection seen, at most 60 s before. A block that nothing fresh
+  confirms waits for the request itself, which a real block rejects. A warning is shown and recorded at the end of its turn, and only
+  when the newest reading still supports it; otherwise it is dropped and can
+  fire again when it is true. When a window reads 50 points or more below the
+  reading that fired a warning, in the same cycle, the window's warnings arm
+  again for the rest of the cycle, also in a resumed session.
 - Proxy rejection flags can remain after a quota reset.
-  A later reset cycle or a successful response from the applicable model clears that flag below 95% used.
+  A later reset cycle, a granted reset (a rejected window at 95% or more that
+  then reads 50 points lower with the same reset), or a successful response
+  from the applicable model clears that flag below 95% used.
   A new structured quota error restores the block. A rejection without newer evidence stays blocked.
   Cleared block warnings remain in history but do not enter later model requests.
 - A proxy such as Meridian can answer the quota poll without its usage-endpoint

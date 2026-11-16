@@ -48,6 +48,11 @@ async function request(pi: FakePi, ctx: unknown, messages: unknown[] = []): Prom
 	return await pi.handlers.get("context")!({ messages }, ctx);
 }
 
+/** The turn end that shows and records what the request before it carried. */
+async function endTurn(pi: FakePi, ctx: unknown): Promise<void> {
+	await pi.handlers.get("turn_end")!({ toolResults: [] }, ctx);
+}
+
 function fakeCtx(pi: FakePi, model: { provider: string; id: string }, idle = true) {
 	const notices: string[] = [];
 	return {
@@ -126,6 +131,8 @@ test("a crossing at turn end warns once, persists the key, and stays quiet after
 	assert.equal(pi.sent.length, 0);
 	const projected = await request(pi, ctx);
 	assert.equal(projected.messages.length, 1);
+	assert.equal(pi.sent.length, 0, "shown at the turn end, not when the request is built");
+	await endTurn(pi, ctx);
 	assert.equal(pi.sent.length, 1);
 	assert.equal(pi.sent[0].triggerTurn, false);
 	assert.equal(pi.sent[0].deliverAs, undefined);
@@ -143,6 +150,7 @@ test("a crossing at turn end warns once, persists the key, and stays quiet after
 	await pi.handlers.get("turn_end")!({ toolResults: [{}] }, busy);
 	assert.equal(pi.sent.length, 1);
 	await request(pi, busy);
+	await endTurn(pi, busy);
 	assert.equal(pi.sent.length, 2);
 	assert.equal(pi.sent[1].triggerTurn, false);
 	assert.match(pi.sent[1].content, /^Usage warning: .*too far away to wait for/);
@@ -154,6 +162,7 @@ test("a resumed session restores fired keys and the budget instead of repeating 
 	anthropicSnapshot(store, 91);
 	await pi.handlers.get("session_start")!({}, ctx);
 	await request(pi, ctx);
+	await endTurn(pi, ctx);
 	assert.equal(pi.sent.length, 1);
 	await pi.command!.handler("budget 7d 95", ctx);
 	assert.match(ctx.notices.at(-1) ?? "", /Session budget: 7d at 95%/);
@@ -181,6 +190,7 @@ test("a session budget fires once at its own threshold and marks the provider ho
 	anthropicSnapshot(store, 61);
 	await pi.handlers.get("turn_end")!({ toolResults: [{}] }, ctx);
 	await request(pi, ctx);
+	await endTurn(pi, ctx);
 	assert.equal(pi.sent.length, 1);
 	assert.match(pi.sent[0].content, /reached the session budget: 61% used, budget 60%/);
 	await pi.handlers.get("turn_end")!({ toolResults: [{}] }, ctx);
@@ -230,6 +240,7 @@ test("/usage injects a snapshot and toggles warnings in the config file", async 
 	await pi.command!.handler("warnings on", ctx);
 	await pi.handlers.get("turn_end")!({ toolResults: [{}] }, ctx);
 	await request(pi, ctx);
+	await endTurn(pi, ctx);
 	assert.equal(pi.sent.length, 2);
 	await pi.command!.handler("bogus", ctx);
 	assert.match(ctx.notices.at(-1) ?? "", /^Usage: \/usage/);
@@ -297,6 +308,7 @@ test("with the default config, bands stay silent but a session budget still warn
 	assert.deepEqual(report.limits[0].thresholds, []);
 	await pi.handlers.get("turn_end")!({ toolResults: [{}] }, ctx);
 	await request(pi, ctx);
+	await endTurn(pi, ctx);
 	assert.equal(pi.sent.length, 1);
 	assert.match(pi.sent[0].content, /reached the session budget: 96% used, budget 60%/);
 	assert.doesNotMatch(pi.sent[0].content, /sleep/);
@@ -314,7 +326,10 @@ test("a limit climbing to a block over many polls with drifting resets sends two
 	});
 	for (let i = 0; i < 70; i++) {
 		poll(i, Math.min(100, 90 + Math.floor(i / 5)));
-		if (i % 3 === 0) await request(pi, ctx);
+		if (i % 3 === 0) {
+			await request(pi, ctx);
+			await endTurn(pi, ctx);
+		}
 	}
 	assert.deepEqual(pi.sent.map((sent) => sent.content.split(":")[0]), ["Usage notice", "Usage warning"]);
 	assert.match(pi.sent[1].content, /5h is at 95%/);
@@ -327,6 +342,7 @@ test("a limit climbing to a block over many polls with drifting resets sends two
 	for (let i = 70; i < 90; i++) {
 		poll(i, 100);
 		await request(reloaded, reloadedCtx);
+		await endTurn(reloaded, reloadedCtx);
 	}
 	assert.deepEqual(reloaded.sent, []);
 });
@@ -351,6 +367,7 @@ test("idle notices are checked at the next prompt, after switching from Claude t
 	// Returning to Claude can still warn: no false fired key was persisted while idle.
 	await pi.handlers.get("model_select")!({ model: ctx.model, previousModel: codex.model }, ctx);
 	await request(pi, ctx);
+	await endTurn(pi, ctx);
 	assert.equal(pi.sent.length, 1);
 	assert.match(pi.sent[0].content, /anthropic 7d is at 96%/);
 });

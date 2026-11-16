@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { defineTool, getAgentDir, type ContextEvent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readSection, updateSection } from "../lib/extras-config.ts";
-import { sharedLimitStore, type LimitStore } from "../lib/limit-store.ts";
+import { sharedLimitStore, type LimitSnapshot, type LimitStore } from "../lib/limit-store.ts";
 import { limitKey, planMember, storeKey } from "../lib/plan-billing.ts";
 import { operationalError } from "../lib/operational-log.ts";
 import { markRow } from "../lib/tool-row.ts";
@@ -20,11 +20,13 @@ import { parseRateLimit } from "../lib/rate-limit-recovery/core.ts";
 import { routedModel } from "../lib/routed-model.ts";
 import { createDollarsCollector, type DollarsCollector } from "../lib/usage-dollars/collect.ts";
 import {
+	FRESH_EVIDENCE_MS,
 	hotProviders,
 	isUnmetered,
 	normalizeGuardConfig,
 	pendingWarnings,
 	pricedProviders,
+	rearmableKeys,
 	unavailableLimits,
 	unmeteredModel,
 	usageReport,
@@ -34,6 +36,7 @@ import {
 	type CollectedDollars,
 	type GuardConfig,
 	type SessionBudget,
+	type Warning,
 } from "../lib/usage-guard-core.ts";
 
 const AGENT_DIR = getAgentDir();
@@ -46,6 +49,10 @@ const USAGE_HELP = "Usage: /usage | /usage budget <window> <pct> | /usage budget
 
 interface GuardEntry {
 	fired?: string[];
+	/** The percent of the reading that fired the keys in `fired`; a granted reset re-arms them. */
+	pct?: number;
+	/** Keys armed again after a granted reset. */
+	rearmed?: string[];
 	budget?: SessionBudget | null;
 }
 
@@ -157,6 +164,17 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	// pi-extras.json sits in the agent directory, next to the sessions the ledger reads.
 	const dollars = options.dollars ?? createDollarsCollector({ agentDir: dirname(configFile), configFile });
 	let fired = new Set<string>();
+	/** By fired key: the percent of the reading that fired it, when known. */
+	let firedPct = new Map<string, number | undefined>();
+	/**
+	 * Notices already in a request but not yet shown or recorded. The turn end
+	 * shows each one that the newest reading still supports and drops the rest.
+	 */
+	let queued: CustomMessage[] = [];
+	/** By limit family: when this session last got a quota rejection, the freshest evidence of a block. */
+	const rejectedAt = new Map<string, number>();
+	/** By limit family: when a stale final warning last asked for a forced poll. */
+	const confirmAskedAt = new Map<string, number>();
 	let budget: SessionBudget | undefined;
 	let latestCtx: ExtensionContext | undefined;
 	/**
@@ -168,13 +186,89 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 
 	function restore(ctx: ExtensionContext): void {
 		fired = new Set();
+		firedPct = new Map();
+		queued = [];
 		budget = undefined;
 		for (const entry of ctx.sessionManager.getEntries()) {
 			if (entry.type !== "custom" || entry.customType !== GUARD_CUSTOM_TYPE) continue;
 			const data = (entry as { data?: GuardEntry }).data;
-			for (const key of data?.fired ?? []) fired.add(key);
+			for (const key of data?.fired ?? []) {
+				fired.add(key);
+				firedPct.set(key, typeof data?.pct === "number" ? data.pct : undefined);
+			}
+			for (const key of data?.rearmed ?? []) {
+				fired.delete(key);
+				firedPct.delete(key);
+			}
 			if (data && "budget" in data) budget = data.budget ?? undefined;
 		}
+	}
+
+	/** The newest evidence for a warning: its reading's sample time, or a quota rejection seen here. */
+	function evidenceAt(warning: Warning): number {
+		const sampled = warning.entry.sampledMs ?? store.get(warning.provider)?.atMs ?? -Infinity;
+		return Math.max(sampled, rejectedAt.get(warning.provider) ?? -Infinity);
+	}
+
+	/** Old evidence of a block waits for the request: a real block rejects it, which is fresh evidence. */
+	function supported(warning: Warning): boolean {
+		return warning.reason !== "exhausted" || fresh(warning);
+	}
+
+	function fresh(warning: Warning): boolean {
+		return now() - evidenceAt(warning) <= FRESH_EVIDENCE_MS;
+	}
+
+	/** A granted reset arms the window's warnings again. */
+	function rearm(snapshots: Array<[string, LimitSnapshot]>, model: ActiveModel): void {
+		const keys = rearmableKeys(snapshots, model, firedPct, now());
+		if (!keys.length) return;
+		for (const key of keys) {
+			fired.delete(key);
+			firedPct.delete(key);
+		}
+		pi.appendEntry(GUARD_CUSTOM_TYPE, { rearmed: keys } satisfies GuardEntry);
+	}
+
+	/**
+	 * At a turn end, show and record each queued notice the newest reading
+	 * still supports. A dropped one leaves its key unfired, so it can fire
+	 * again when it is true.
+	 */
+	function flush(ctx: ExtensionContext): void {
+		if (!queued.length) return;
+		const notices = queued;
+		queued = [];
+		const model = activeModel(ctx);
+		const snapshot = model.provider ? store.get(limitKey(model.provider)) : undefined;
+		for (const notice of notices) {
+			const details = notice.details as { key: string; pct?: number };
+			if (!warningApplies(notice.details, model, now(), snapshot, budget ?? null)) {
+				fired.delete(details.key);
+				firedPct.delete(details.key);
+				continue;
+			}
+			pi.appendEntry(GUARD_CUSTOM_TYPE, { fired: [details.key], ...(details.pct !== undefined ? { pct: details.pct } : {}) } satisfies GuardEntry);
+			pi.sendMessage(notice, { triggerTurn: false });
+		}
+	}
+
+	/**
+	 * Before a final warning from old evidence enters a request, ask once a
+	 * minute per family for a forced poll, within the poll budget: a granted
+	 * reset since that reading shows only in a newer one.
+	 */
+	async function confirmStale(ctx: ExtensionContext): Promise<void> {
+		const model = activeModel(ctx);
+		const providers = new Set(pendingWarnings(store.entries(), model, config, budget, fired, now())
+			.filter((warning) => warning.final && !fresh(warning)).map((warning) => warning.provider));
+		const polls: Array<[string, Promise<boolean>]> = [];
+		for (const provider of providers) {
+			if (now() - (confirmAskedAt.get(provider) ?? -Infinity) < FRESH_EVIDENCE_MS) continue;
+			confirmAskedAt.set(provider, now());
+			polls.push([provider, store.refresh(planMember(provider), true)]);
+		}
+		if (polls.length) await withinBudget(polls);
 	}
 
 	function setBudget(next: SessionBudget | undefined): void {
@@ -249,23 +343,26 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		try {
 			const snapshots = store.entries();
 			const model = activeModel(ctx);
+			rearm(snapshots, model);
 			const hot = hotProviders(snapshots, model, config, budget, now());
 			for (const [provider] of snapshots) store.setHot(provider, hot.has(provider));
 			if (!deliverWarnings) return [];
-			return pendingWarnings(snapshots, model, config, budget, fired, now()).map((warning) => {
+			return pendingWarnings(snapshots, model, config, budget, fired, now()).filter(supported).map((warning) => {
+				const pct = warning.entry.approximate ? undefined : warning.entry.usedPct;
 				const notice: CustomMessage = {
 					role: "custom", customType: GUARD_CUSTOM_TYPE, display: true, timestamp: now(),
 					content: warningMessage(warning, config, now()),
 					details: {
 						key: warning.key, provider: warning.provider, modelFamily: warning.entry.modelFamily,
 						threshold: warning.threshold, reason: warning.reason, final: warning.final,
+						...(pct !== undefined ? { pct } : {}),
 					},
 				};
 				fired.add(warning.key);
-				pi.appendEntry(GUARD_CUSTOM_TYPE, { fired: [warning.key] } satisfies GuardEntry);
-				// The returned projection reaches this request immediately. Persist/display
-				// at the safe turn boundary, never steer or create a follow-up request.
-				pi.sendMessage(notice, { triggerTurn: false });
+				firedPct.set(warning.key, pct);
+				// The returned projection reaches this request now. The turn end shows and
+				// records it, if a newer reading has not disproved it by then (flush).
+				queued.push(notice);
 				return notice;
 			});
 		} catch (error) {
@@ -377,6 +474,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 
 	pi.on("session_start", async (_event, ctx) => {
 		closed = false;
+		rejectedAt.clear();
+		confirmAskedAt.clear();
 		latestCtx = ctx;
 		config = loadGuardConfig(configFile);
 		restore(ctx);
@@ -395,6 +494,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		if (message.role !== "assistant") return;
 		if (["stop", "toolUse"].includes(message.stopReason)) store.recordSuccess(limitKey(message.provider), message.model, now());
 		else if (message.stopReason === "error" && parseRateLimit(message.errorMessage)) {
+			rejectedAt.set(limitKey(message.provider), now());
 			store.recordRejection(limitKey(message.provider), message.model, now());
 		}
 	});
@@ -402,7 +502,15 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	pi.on("turn_end", async (_event, ctx) => {
 		if (closed) return;
 		latestCtx = ctx;
+		flush(ctx);
 		evaluate(ctx);
+	});
+
+	// A run that ends without a turn end (an aborted request) still shows what its request carried.
+	pi.on("agent_end", async (_event, ctx) => {
+		if (closed) return;
+		latestCtx = ctx;
+		flush(ctx);
 	});
 
 	// Prompts, automatic job wakes and queued follow-ups all share this request
@@ -410,6 +518,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	pi.on("context", async (event, ctx) => {
 		if (closed) return undefined;
 		latestCtx = ctx;
+		await confirmStale(ctx);
+		if (closed) return undefined;
 		const notices = evaluate(ctx, true);
 		const model = activeModel(ctx);
 		return {
