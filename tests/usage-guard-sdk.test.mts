@@ -84,7 +84,8 @@ test("a real SDK completion clears a cached proxy rejection before the next requ
 	t.after(() => f.close());
 	f.store.set("anthropic", { entries: parseProxyQuota({ buckets: [{ type: "five_hour", utilization: 0.03, resetsAt: RESET, status: "rejected" }] }), atMs: NOW - 1, source: "poll" });
 	await f.session.prompt("Use Claude.");
-	assert.equal(warnings(f.calls[0].messages).length, 1, "no evidence clears the initial rejection");
+	// A kept "rejected" status at a low percent is no block until a quota rejection comes (Meridian keeps it after a granted reset).
+	assert.deepEqual(warnings(f.calls[0].messages), [], "a low-percent kept rejection waits for a quota rejection");
 	assert.equal(f.store.get("anthropic")?.entries[0].exhausted, false);
 	await f.session.prompt("Continue after the successful response.");
 	assert.deepEqual(warnings(f.calls[1].messages), []);

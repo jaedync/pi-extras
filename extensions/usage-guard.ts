@@ -167,6 +167,9 @@ interface Queued {
  */
 const BURST_RETRY_SECONDS = 15 * 60;
 
+/** At or above this percent a blocked window explains a quota rejection; below it a kept "rejected" status may be stale. */
+const NEAR_FULL_PCT = 95;
+
 /** The percent a fired key stands for when its entry has none (older versions): a block is 100, a band its threshold. */
 function keyPct(key: string): number | undefined {
 	const parts = key.split("|");
@@ -234,11 +237,6 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		return warning.entry.sampledMs ?? store.get(warning.provider)?.atMs ?? -Infinity;
 	}
 
-	/** The newest evidence for a warning: its reading's sample time, or a quota rejection seen here. */
-	function evidenceAt(warning: Warning): number {
-		return Math.max(sampledAt(warning), rejectedAt.get(warning.provider) ?? -Infinity);
-	}
-
 	/** True when a model that the window governs got a response after `since`. */
 	function succeededAfter(provider: string, modelFamily: string | undefined, since: number): boolean {
 		for (const [id, at] of succeededAt.get(provider) ?? []) {
@@ -248,14 +246,26 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	}
 
 	/**
-	 * Old evidence of a block waits for the request: a real block rejects it,
-	 * which is fresh evidence. A success after the reading disproves its block
-	 * until a newer reading: a rejection does not name its window (it can be a
-	 * per-minute limit), so it cannot bring that block back.
+	 * Only a reading names a blocked window: a quota rejection does not say
+	 * which window it hit, so it starts a poll (showRejected) but is no
+	 * evidence alone. The reading must be fresh, and no success of a governed
+	 * model may come after it. A proxy can keep a window's last "rejected"
+	 * status under a newer, lower percent (Meridian after a granted reset), so
+	 * a block below near-full also needs a fresh quota rejection that no fuller
+	 * blocked window of the family explains.
 	 */
+	function blockEvidenced(provider: string, entry: Warning["entry"], sampled: number): boolean {
+		if (now() - sampled > FRESH_EVIDENCE_MS || succeededAfter(provider, entry.modelFamily, sampled)) return false;
+		const pct = entry.approximate ? undefined : entry.usedPct;
+		if (pct === undefined || pct >= NEAR_FULL_PCT) return true;
+		if (now() - (rejectedAt.get(provider) ?? -Infinity) > FRESH_EVIDENCE_MS) return false;
+		const window = entry.key ?? entry.label;
+		return !(store.get(provider)?.entries ?? []).some((other) => (other.key ?? other.label) !== window &&
+			other.exhausted === true && !other.approximate && (other.usedPct ?? 0) >= NEAR_FULL_PCT);
+	}
+
 	function supported(warning: Warning): boolean {
-		if (warning.reason !== "exhausted") return true;
-		return fresh(warning) && !succeededAfter(warning.provider, warning.entry.modelFamily, sampledAt(warning));
+		return warning.reason !== "exhausted" || blockEvidenced(warning.provider, warning.entry, sampledAt(warning));
 	}
 
 	/**
@@ -272,13 +282,11 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		const window = record.key.split("|").slice(1, -2).join("|");
 		const entry = snapshot?.entries.find((candidate) => (candidate.key ?? candidate.label) === window);
 		if (!entry) return false;
-		const sampled = entry.sampledMs ?? snapshot?.atMs ?? -Infinity;
-		if (succeededAfter(record.provider, modelFamily, sampled)) return true;
-		return now() - Math.max(sampled, rejectedAt.get(record.provider) ?? -Infinity) > FRESH_EVIDENCE_MS;
+		return !blockEvidenced(record.provider, entry, entry.sampledMs ?? snapshot?.atMs ?? -Infinity);
 	}
 
 	function fresh(warning: Warning): boolean {
-		return now() - evidenceAt(warning) <= FRESH_EVIDENCE_MS;
+		return now() - sampledAt(warning) <= FRESH_EVIDENCE_MS;
 	}
 
 	/** A granted reset arms the window's warnings again. */
@@ -405,13 +413,18 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	}
 
 	/**
-	 * After a quota rejection, show the block warnings it is fresh evidence for:
-	 * the request that met the block may have been built on an older reading.
+	 * After a quota rejection, poll once and show the block warnings that the
+	 * new reading supports: a proxy samples the window that rejected the
+	 * request, and the request may have been built on an older reading.
 	 */
-	function showRejected(ctx: ExtensionContext): void {
+	async function showRejected(ctx: ExtensionContext): Promise<void> {
 		const provider = activeModel(ctx).provider;
 		// Another family's rejection waits for a turn end on that family: evaluate sees only the active one.
 		if (!provider || !rejectedInRun.delete(limitKey(provider))) return;
+		const family = limitKey(provider);
+		confirmAskedAt.set(family, now());
+		await withinBudget([[family, store.refresh(planMember(family), true)]]);
+		if (closed) return;
 		evaluate(ctx, true, (warning) => warning.reason === "exhausted");
 		flush(ctx);
 	}
@@ -592,7 +605,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		if (closed) return;
 		latestCtx = ctx;
 		flush(ctx);
-		showRejected(ctx);
+		await showRejected(ctx);
+		if (closed) return;
 		evaluate(ctx);
 	});
 
@@ -601,7 +615,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		if (closed) return;
 		latestCtx = ctx;
 		flush(ctx);
-		showRejected(ctx);
+		await showRejected(ctx);
 	});
 
 	// Prompts, automatic job wakes and queued follow-ups all share this request

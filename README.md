@@ -1028,29 +1028,33 @@ a window, because requests stop at the cap.
   model-scoped window notes that other models are unaffected. Fired keys and the budget persist with the
   session, so a resumed session does not repeat them.
 - A granted (banked) reset empties a window but keeps its reset time, and a
-  proxy can serve a reading from before it for minutes. So before a final
-  warning (a provider block, the top band, a session budget) from a reading
-  sampled more than 60 s ago enters a request, Usage Guard asks for one
-  forced poll (at most once a minute per provider, within the 2 s poll
-  budget). A provider block also needs that fresh evidence: a reading sampled,
-  or a quota rejection seen, at most 60 s before, and no successful response
-  of a model that the window governs since that reading was sampled. A
-  rejection does not name its window (it can be a per-minute limit), so it
-  does not bring back a block that a success disproved: only a newer reading
-  does. A 429 whose `retry_after` is under 15 minutes is a burst limit, not a
-  quota window, and is no evidence of a block. A shown block stays in later
-  requests only on such fresh evidence, so it leaves the first request after a
-  granted reset while the proxy still serves the old sample. A block that nothing fresh
-  confirms waits for the request itself: a real block rejects it, and the
-  rejection shows the block warning at the end of that turn. A warning is
-  shown and recorded at the end of its turn, and only when the newest reading
-  still supports it; otherwise it is dropped and can fire again when it is
-  true. Only an exact reading sampled no earlier than the one that fired a
-  warning can drop it, and a successful response drops a block warning. When a window reads 50 points or more below the
-  reading that fired a warning, in the same cycle, the window's warnings arm
-  again for the rest of the cycle, also in a resumed session. A key that an
-  older version recorded with no percent counts as its threshold (a block as
-  100%).
+  proxy can serve a reading from before it for minutes. So Usage Guard trusts
+  only fresh readings for a final warning (a provider block, the top band, a
+  session budget):
+  - Before such a warning from a reading sampled more than 60 s ago enters a
+    request, Usage Guard asks for one forced poll (at most once a minute per
+    provider, within the 2 s poll budget).
+  - Only a reading names a blocked window. A block warning needs a reading
+    that shows the block, sampled at most 60 s before, and no successful
+    response of a model that the window governs since that sample.
+  - A quota rejection does not say which window it hit. It starts one forced
+    poll at the end of its turn, and the block warnings that the new reading
+    supports show then. A proxy samples the window that rejected the request.
+  - A proxy can keep a window's last "rejected" status under a newer, lower
+    percent (Meridian does after a granted reset). A block below 95% therefore
+    also needs a quota rejection in the last 60 s, and no other window of the
+    provider blocked at 95% or more, which would explain that rejection.
+  - A 429 whose `retry_after` is under 15 minutes is a burst limit, not a
+    quota window, and is not counted as a quota rejection.
+  - A shown block stays in later requests only while that evidence holds.
+- A warning is shown and recorded at the end of its turn, and only when the
+  newest reading still supports it; otherwise it is dropped and can fire again
+  when it is true. Only an exact reading sampled no earlier than the one that
+  fired a warning can drop it, and a successful response drops a block
+  warning. When a window reads 50 points or more below the reading that fired
+  a warning, in the same cycle, the window's warnings arm again for the rest
+  of the cycle, also in a resumed session. A key that an older version
+  recorded with no percent counts as its threshold (a block as 100%).
 - Proxy rejection flags can remain after a quota reset.
   A later reset cycle, a granted reset (a rejected window at 95% or more that
   then reads 50 points lower with the same reset), or a successful response

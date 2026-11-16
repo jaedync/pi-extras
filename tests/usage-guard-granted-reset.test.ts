@@ -20,7 +20,12 @@ const MODEL = { provider: "anthropic", id: "claude-fable-5-2" };
 const made: string[] = [];
 after(() => { for (const dir of made) rmSync(dir, { recursive: true, force: true }); });
 
-interface Sent { content: string; details?: { reason?: string; threshold?: number; key?: string } }
+interface Sent {
+	content: string;
+	details?: { reason?: string; threshold?: number; key?: string };
+	/** The reading of the notice's window when it was shown. */
+	seen?: { usedPct?: number; exhausted?: boolean; sampledMs?: number };
+}
 
 export interface Harness {
 	clock: { now: number };
@@ -53,8 +58,13 @@ export function harness(options: { refresher?: (store: LimitStore, now: number) 
 	const pi = {
 		on: (name: string, handler: (event: unknown, ctx: unknown) => Promise<unknown>) => handlers.set(name, handler),
 		sendMessage: (message: Sent) => {
-			log.push(`sent:${message.details?.key}`);
-			sent.push({ content: message.content, details: message.details });
+			const key = message.details?.key ?? "";
+			log.push(`sent:${key}`);
+			const window = key.split("|").slice(1, -2).join("|");
+			const snapshot = store.get(key.split("|")[0]);
+			const entry = snapshot?.entries.find((candidate) => (candidate.key ?? candidate.label) === window);
+			const seen = entry && { usedPct: entry.usedPct, exhausted: entry.exhausted, sampledMs: entry.sampledMs ?? snapshot?.atMs };
+			sent.push({ content: message.content, details: message.details, ...(seen ? { seen } : {}) });
 		},
 		appendEntry: (customType: string, data: unknown) => {
 			const record = data as { fired?: string[]; rearmed?: string[] };
@@ -83,6 +93,11 @@ export function reading(store: LimitStore, pct: number, rejected: boolean, sampl
 		buckets: [{ type: "seven_day", status: rejected ? "rejected" : "allowed", utilization: pct / 100, resetsAt: RESET, observedAt: sampledMs }],
 	}, atMs);
 	store.set("anthropic", { entries, atMs, source: "poll" });
+}
+
+/** A proxy poll that serves `state`: Meridian samples a window again only when a request meets it. */
+function proxy(state: { pct: number; rejected: boolean; sampledMs: number }): (store: LimitStore, now: number) => void {
+	return (store, now) => reading(store, state.pct, state.rejected, state.sampledMs, now);
 }
 
 async function endTurn(h: Harness, stopReason = "toolUse"): Promise<void> {
@@ -128,7 +143,7 @@ test("a pre-grant block that no refresh can confirm does not warn: the request i
 	assert.deepEqual(h.sent, []);
 });
 
-test("a fresh block still warns, and a quota rejection is fresh evidence for an old reading", async () => {
+test("a fresh block still warns, and a quota rejection polls for the reading that shows the block", async () => {
 	const fresh = harness();
 	await fresh.on("session_start")({}, fresh.ctx);
 	fresh.clock.now = GRANT + 100_000;
@@ -137,11 +152,14 @@ test("a fresh block still warns, and a quota rejection is fresh evidence for an 
 	await endTurn(fresh, "error");
 	assert.equal(fresh.sent.length, 1);
 
-	const rejected = harness();
+	const state = { pct: 100, rejected: true, sampledMs: GRANT - 90_000 };
+	const rejected = harness({ refresher: proxy(state) });
 	await rejected.on("session_start")({}, rejected.ctx);
-	reading(rejected.store, 100, true, GRANT - 90_000);
+	reading(rejected.store, 100, true, state.sampledMs);
 	rejected.clock.now = GRANT + 100_000;
-	assert.deepEqual(await rejected.request(), []);
+	assert.deepEqual(await rejected.request(), [], "the forced poll serves the old sample again");
+	// The request meets the block, and the proxy samples the window at the rejection.
+	state.sampledMs = rejected.clock.now;
 	await rejected.on("message_end")({ message: { role: "assistant", provider: "anthropic", model: MODEL.id, stopReason: "error", errorMessage: '{"error":{"type":"rate_limit_error","retry_after":7200}}' } }, rejected.ctx);
 	await rejected.on("turn_end")({ toolResults: [] }, rejected.ctx);
 	assert.equal(rejected.sent[0]?.details?.reason, "exhausted", "the rejection shows the block at the turn end");
@@ -218,14 +236,16 @@ test("a block at a low percent does not re-arm when the request succeeds and fai
 	await h.on("session_start")({}, h.ctx);
 	h.clock.now = GRANT;
 	reading(h.store, 3, true, h.clock.now);
-	assert.equal((await h.request())[0]?.details?.reason, "exhausted");
-	await endTurn(h);
+	assert.deepEqual(await h.request(), [], "a kept status at a low percent waits for a quota rejection");
+	await rejectTurn(h);
+	assert.equal((h.sent as Sent[])[0]?.details?.reason, "exhausted");
 	h.clock.now += 10_000;
+	await endTurn(h);
 	reading(h.store, 3, true, h.clock.now);
 	assert.deepEqual(await h.request(), []);
-	await endTurn(h, "error");
+	await rejectTurn(h);
 	assert.deepEqual(await h.request(), [], "one wrap-up per cycle");
-	await endTurn(h, "error");
+	await rejectTurn(h);
 	assert.equal(h.sent.length, 1);
 });
 
@@ -327,12 +347,23 @@ test("review 2: a block that fired from an approximate reading arms again after 
 });
 
 test("review 3: a real block from an old reading is shown when the request is rejected, also with no turn end", async () => {
+	// With no new reading, a rejection alone does not name a window.
+	const unpolled = harness();
+	await unpolled.on("session_start")({}, unpolled.ctx);
+	reading(unpolled.store, 100, true, GRANT - 180_000);
+	unpolled.clock.now = GRANT;
+	await unpolled.request();
+	await rejectTurn(unpolled);
+	assert.deepEqual(unpolled.sent, []);
+
 	for (const withTurnEnd of [true, false]) {
-		const h = harness();
+		const state = { pct: 100, rejected: true, sampledMs: GRANT - 180_000 };
+		const h = harness({ refresher: proxy(state) });
 		await h.on("session_start")({}, h.ctx);
-		reading(h.store, 100, true, GRANT - 180_000);
+		reading(h.store, 100, true, state.sampledMs);
 		h.clock.now = GRANT;
 		assert.deepEqual(await h.request(), [], "old evidence waits for the request");
+		state.sampledMs = h.clock.now;
 		await rejectTurn(h, withTurnEnd);
 		assert.equal(h.sent.length, 1, `the rejection shows the block (turn end: ${withTurnEnd})`);
 		assert.equal(h.sent[0].details?.reason, "exhausted");
@@ -358,10 +389,12 @@ test("review 4: a band notice is not dropped by a reading older than the one tha
 });
 
 test("review 2.3: a rejection waits for a turn end on its own family after a model switch", async () => {
-	const h = harness();
+	const state = { pct: 100, rejected: true, sampledMs: GRANT - 180_000 };
+	const h = harness({ refresher: proxy(state) });
 	await h.on("session_start")({}, h.ctx);
 	h.clock.now = GRANT;
-	reading(h.store, 100, true, h.clock.now - 180_000);
+	reading(h.store, 100, true, state.sampledMs);
+	state.sampledMs = h.clock.now;
 	await h.on("message_end")({ message: { role: "assistant", provider: "anthropic", model: MODEL.id, stopReason: "error", errorMessage: QUOTA_ERROR } }, h.ctx);
 	const other = { ...h.ctx, model: { provider: "openai-codex", id: "gpt-6-luna" } };
 	await h.on("turn_end")({ toolResults: [] }, other);
@@ -378,9 +411,10 @@ function history(h: Harness): unknown[] {
 }
 
 test("review 3.1: a burst 429 before any success does not make a pre-grant block fresh", async () => {
-	const h = harness();
+	const state = { pct: 100, rejected: true, sampledMs: GRANT - 90_000 };
+	const h = harness({ refresher: proxy(state) });
 	await h.on("session_start")({}, h.ctx);
-	reading(h.store, 100, true, GRANT - 90_000);
+	reading(h.store, 100, true, state.sampledMs);
 	h.clock.now = GRANT + 100_000;
 	assert.deepEqual(await h.request(), []);
 	await h.on("message_end")({ message: { role: "assistant", provider: "anthropic", model: MODEL.id, stopReason: "error", errorMessage: BURST_ERROR } }, h.ctx);
@@ -389,7 +423,8 @@ test("review 3.1: a burst 429 before any success does not make a pre-grant block
 	assert.deepEqual(h.sent, [], "no block is shown");
 	h.clock.now += 20_000;
 	assert.deepEqual(await h.request(), [], "the retry carries no block");
-	// A quota error with no retry time still counts for the window.
+	// A quota error with no retry time polls, and the proxy's sample of the rejection shows the block.
+	state.sampledMs = h.clock.now;
 	await h.on("message_end")({ message: { role: "assistant", provider: "anthropic", model: MODEL.id, stopReason: "error", errorMessage: '{"error":{"type":"rate_limit_error"}}' } }, h.ctx);
 	await h.on("agent_end")({ messages: [] }, h.ctx);
 	assert.equal((h.sent as Sent[])[0]?.details?.reason, "exhausted");
@@ -420,10 +455,67 @@ test("review 3.3: a block notice in history leaves the first request after a gra
 	reading(h.store, 100, true, GRANT - 35_000, h.clock.now);
 	const result = await h.on("context")({ messages: history(h) }, h.ctx) as { messages: unknown[] };
 	assert.deepEqual(result.messages, [], "old evidence does not keep the block in the request");
-	// A new quota rejection is fresh evidence: the block is back in the next request.
+	// A new quota rejection and the proxy's new sample of it bring the block back into the next request.
+	reading(h.store, 100, true, h.clock.now);
 	await rejectTurn(h);
 	const again = await h.on("context")({ messages: history(h) }, h.ctx) as { messages: unknown[] };
 	assert.equal(again.messages.length, 1);
+});
+
+const RESET5 = GRANT + 2 * 3_600_000;
+
+/** Meridian's answer with both windows: a request's rate-limit event, or the OAuth overlay, sets each bucket's sample time. */
+function bothWindows(store: LimitStore, five: [number, boolean], seven: [number, boolean], sampledMs: number, atMs = sampledMs): void {
+	const entries = parseProxyQuota({ buckets: [
+		{ type: "five_hour", status: five[1] ? "rejected" : "allowed", utilization: five[0] / 100, resetsAt: RESET5, observedAt: sampledMs },
+		{ type: "seven_day", status: seven[1] ? "rejected" : "allowed", utilization: seven[0] / 100, resetsAt: RESET, observedAt: sampledMs },
+	] }, atMs);
+	store.set("anthropic", { entries, atMs, source: "poll" });
+}
+
+const shownKeys = (h: Harness) => h.sent.map((sent) => sent.details?.key ?? "");
+
+test("review 4.1: a real 5h rejection after a 7d grant does not show the pre-grant 7d block", async () => {
+	// No poller: both windows keep the pre-grant sample.
+	const old = harness();
+	await old.on("session_start")({}, old.ctx);
+	bothWindows(old.store, [100, true], [100, true], GRANT - 90_000);
+	old.clock.now = GRANT + 100_000;
+	assert.deepEqual(await old.request(), []);
+	await old.on("message_end")({ message: { role: "assistant", provider: "anthropic", model: MODEL.id, stopReason: "error", errorMessage: '{"error":{"type":"rate_limit_error","retry_after":7000}}' } }, old.ctx);
+	await old.on("turn_end")({ toolResults: [] }, old.ctx);
+	await old.on("agent_end")({ messages: [] }, old.ctx);
+	assert.ok(!shownKeys(old).some((key) => key.includes("|seven_day|")), `7d block shown: ${shownKeys(old)}`);
+
+	// Meridian: the 5h rejection is a fresh sample, and the OAuth overlay keeps 7d's old "rejected" at 0%.
+	const live = harness({ refresher: (store, now) => bothWindows(store, [100, true], [0, true], now) });
+	await live.on("session_start")({}, live.ctx);
+	bothWindows(live.store, [100, true], [100, true], GRANT - 90_000);
+	live.clock.now = GRANT + 100_000;
+	const carried = await live.request();
+	assert.deepEqual(carried.map((notice) => notice.details?.key), [`anthropic|five_hour|x|${RESET5}`], "the request carries the true 5h block only");
+	await live.on("message_end")({ message: { role: "assistant", provider: "anthropic", model: MODEL.id, stopReason: "error", errorMessage: '{"error":{"type":"rate_limit_error","retry_after":7000}}' } }, live.ctx);
+	await live.on("turn_end")({ toolResults: [] }, live.ctx);
+	await live.on("agent_end")({ messages: [] }, live.ctx);
+	assert.deepEqual(shownKeys(live), [`anthropic|five_hour|x|${RESET5}`]);
+	live.clock.now += 30_000;
+	const next = await live.on("context")({ messages: history(live) }, live.ctx) as { messages: Sent[] };
+	assert.ok(!next.messages.some((message) => message.details?.key?.includes("|seven_day|")), "no 7d block in the next request");
+});
+
+test("review 4.2: a new runtime's first reading after a grant, 0% with the proxy's kept rejection, does not block", async () => {
+	const h = harness();
+	await h.on("session_start")({}, h.ctx);
+	h.clock.now = GRANT + 120_000;
+	reading(h.store, 0, true, h.clock.now - 5_000);
+	assert.deepEqual((await h.request()).map((notice) => notice.details?.reason), [], "no block enters the request");
+	await endTurn(h);
+	assert.deepEqual(h.sent, []);
+	// A real block at a low percent still shows at its quota rejection.
+	h.clock.now += 10_000;
+	reading(h.store, 0, true, h.clock.now);
+	await rejectTurn(h);
+	assert.equal((h.sent as Sent[])[0]?.details?.reason, "exhausted");
 });
 
 function random(seed: number): () => number {
@@ -441,24 +533,29 @@ const RATE_LIMIT = '{"error":{"type":"rate_limit_error","retry_after":7200}}';
 const FRESH_MS = 60_000;
 
 /**
- * Random orders of polls (some served from a proxy cache with an old sample),
- * granted resets, requests that carry the shown notices as history, turn ends,
- * run ends with no turn end, successes, quota rejections, burst 429s, resumes
- * and clock steps. Usage only falls at a grant. Checks, for every order:
- * - a block enters a request, new or from history, only on a sample or a quota
- *   rejection at most FRESH_MS old, and on a sample no older than the last success;
- * - a shown notice matches the newest reading when it is shown, and a shown
- *   block comes from a sample no older than the last success;
+ * Random orders of polls (some served from a proxy cache with an old sample, or
+ * with the proxy's kept "rejected" status at a lower percent), granted resets,
+ * requests that carry the shown notices as history, turn ends, run ends with no
+ * turn end, successes, quota rejections (only while the window is blocked),
+ * burst 429s, resumes and clock steps. Usage only falls at a grant. Checks, for
+ * every order:
+ * - truth: a block is shown or carried only while the window is blocked, or at
+ *   most FRESH_MS after its grant;
+ * - a block enters a request, new or from history, only on a sample at most
+ *   FRESH_MS old and no older than the last success (below 95%, also a quota
+ *   rejection at most FRESH_MS old);
+ * - a shown notice matches its window's reading when it is shown;
  * - each shown key was recorded first, and no key is shown twice without a
  *   re-arm between;
- * - a quota rejection on a current block shows a wrap-up by its run end;
+ * - a quota rejection on an evidenced block shows a wrap-up by its run end;
  * - after a grant, a reading at the top band, or a fresh block, warns again.
  */
 test("property: over random event orders, warnings follow the newest evidence and re-arm after each grant", async () => {
-	for (let seed = 1; seed <= 400; seed++) {
+	for (let seed = 1; seed <= 1000; seed++) {
 		const rand = random(seed);
 		const pick = <T,>(items: readonly T[]): T => items[Math.floor(rand() * items.length)];
 		let truth = { pct: 0, rejected: false };
+		let blockEndedAt = -Infinity;
 		let lastSample = GRANT;
 		let cached = { pct: 0, rejected: false, sampledMs: GRANT };
 		let lastRejectAt = -Infinity;
@@ -466,19 +563,22 @@ test("property: over random event orders, warnings follow the newest evidence an
 		// The percent of the shown wrap-up: the guard re-arms when it sees a reading 50 points lower.
 		let wrapUpShown: number | undefined;
 		let wrapUpQueued = false;
+		// Block keys that a request carried: the turn end may show them after their evidence aged.
+		const carried = new Set<string>();
 		const seeDrop = () => {
 			const pct = h.store.get("anthropic")?.entries[0]?.usedPct;
 			if (wrapUpShown !== undefined && pct !== undefined && pct <= wrapUpShown - 50) wrapUpShown = undefined;
 		};
-		// Odd seeds have a poller that a stale final warning can force; even seeds have none.
-		const h = harness(seed % 2 ? { refresher: (store, now) => { cached = { ...truth, sampledMs: now }; lastSample = now; reading(store, truth.pct, truth.rejected, now); } } : {});
+		// Odd seeds have a poller that a stale final warning or a rejection can force; even seeds have none.
+		const start = () => harness(seed % 2 ? { refresher: (store, now) => { cached = { ...truth, sampledMs: now }; lastSample = now; reading(store, truth.pct, truth.rejected, now); } } : {});
+		let h = start();
 		h.clock.now = GRANT;
 		await h.on("session_start")({}, h.ctx);
 		reading(h.store, 0, false, GRANT);
 		const trace: string[] = [];
 		const where = () => `seed ${seed}: ${trace.join(", ")}`;
-		const persisted = new Set<string>();
-		const shownKeys = new Set<string>();
+		let persisted = new Set<string>();
+		let shownKeys = new Set<string>();
 		let logged = 0;
 		const checkLog = () => {
 			for (const item of h.log.slice(logged)) {
@@ -493,9 +593,15 @@ test("property: over random event orders, warnings follow the newest evidence an
 			}
 			logged = h.log.length;
 		};
-		const blockEvidenced = () => h.clock.now - Math.max(lastSample, lastRejectAt) <= FRESH_MS && lastSample >= lastSuccessAt;
+		const blockEvidenced = () => {
+			const pct = h.store.get("anthropic")?.entries[0]?.usedPct ?? 100;
+			return h.clock.now - lastSample <= FRESH_MS && lastSample >= lastSuccessAt && (pct >= 95 || h.clock.now - lastRejectAt <= FRESH_MS);
+		};
+		const truthBlocked = () => truth.rejected || h.clock.now - blockEndedAt <= FRESH_MS;
 		for (let step = 0; step < 40; step++) {
-			const event = pick(["poll", "poll", "cached", "grant", "request", "request", "turn", "success", "reject", "burst", "agentEnd", "resume", "tick"] as const);
+			let event = pick(["poll", "poll", "cached", "kept", "kept", "grant", "request", "request", "turn", "success", "reject", "burst", "agentEnd", "resume", "newProcess", "tick"] as const);
+			// A quota rejection comes only from a blocked window.
+			if (event === "reject" && !truth.rejected) event = "burst";
 			trace.push(event);
 			if (event === "poll") {
 				const pct = Math.min(100, truth.pct + pick([0, 5, 20, 45]));
@@ -507,7 +613,15 @@ test("property: over random event orders, warnings follow the newest evidence an
 				// A proxy serves its last sample again, maybe from before a grant.
 				reading(h.store, cached.pct, cached.rejected, cached.sampledMs, h.clock.now);
 				lastSample = cached.sampledMs;
+			} else if (event === "kept") {
+				// Meridian overlays a new percent and sample time but keeps the bucket's last "rejected" status.
+				if (cached.rejected) {
+					cached = { pct: truth.pct, rejected: true, sampledMs: h.clock.now };
+					lastSample = h.clock.now;
+					reading(h.store, cached.pct, true, h.clock.now);
+				}
 			} else if (event === "grant") {
+				if (truth.rejected) blockEndedAt = h.clock.now;
 				truth = { pct: 0, rejected: false };
 			} else if (event === "resume") {
 				// A new runtime restores fired keys from the session; it starts with no successes or rejections seen.
@@ -516,6 +630,23 @@ test("property: over random event orders, warnings follow the newest evidence an
 				lastRejectAt = -Infinity;
 				lastSuccessAt = -Infinity;
 				wrapUpQueued = false;
+				carried.clear();
+			} else if (event === "newProcess") {
+				// A new Pi process and session: an empty store, no fired keys; the proxy keeps its state.
+				await h.on("session_shutdown")({}, h.ctx);
+				const at = h.clock.now;
+				h = start();
+				h.clock.now = at;
+				await h.on("session_start")({}, h.ctx);
+				lastSample = -Infinity;
+				lastRejectAt = -Infinity;
+				lastSuccessAt = -Infinity;
+				wrapUpShown = undefined;
+				wrapUpQueued = false;
+				carried.clear();
+				persisted = new Set();
+				shownKeys = new Set();
+				logged = 0;
 			} else if (event === "request") {
 				seeDrop();
 				const shown = h.sent.map((sent) => ({ role: "custom", customType: "usage-guard", content: sent.content, details: sent.details, fromHistory: true }));
@@ -524,9 +655,14 @@ test("property: over random event orders, warnings follow the newest evidence an
 				const entry = h.store.get("anthropic")?.entries[0];
 				const notices = result.messages.filter((message) => !message.fromHistory);
 				for (const message of result.messages) {
-					if (message.details?.reason === "exhausted") assert.ok(blockEvidenced(), `a block in a request on old or disproved evidence: ${where()}`);
+					if (message.details?.reason !== "exhausted") continue;
+					assert.ok(truthBlocked(), `a block in a request while the window is open: ${where()}`);
+					assert.ok(blockEvidenced(), `a block in a request on old or disproved evidence: ${where()}`);
 				}
-				for (const notice of notices) if ((notice.details as { final?: boolean }).final) wrapUpQueued = true;
+				for (const notice of notices) {
+					if ((notice.details as { final?: boolean }).final) wrapUpQueued = true;
+					if (notice.details?.reason === "exhausted") carried.add(notice.details.key ?? "");
+				}
 				// A block is due only on fresh evidence; a top band on any reading.
 				const due = entry !== undefined && !entry.approximate && (entry.exhausted === true ? blockEvidenced() : (entry.usedPct ?? 0) >= 95);
 				if (due && wrapUpShown === undefined && !wrapUpQueued) {
@@ -548,18 +684,23 @@ test("property: over random event orders, warnings follow the newest evidence an
 				await h.on("agent_end")({ messages: [] }, h.ctx);
 				const entry = h.store.get("anthropic")?.entries[0];
 				for (const shown of h.sent.slice(before)) {
-					const details = shown.details as { final?: boolean; reason?: string; threshold?: number };
+					const details = shown.details as { final?: boolean; reason?: string; threshold?: number; key?: string };
 					if (details.reason === "exhausted") {
-						assert.equal(entry?.exhausted, true, `a block shown on an open window: ${where()}`);
-						assert.ok(lastSample >= lastSuccessAt, `a block shown from a reading that a success disproved: ${where()}`);
+						assert.ok(truthBlocked(), `a block shown while the window is open: ${where()}`);
+						assert.equal(shown.seen?.exhausted, true, `a block shown on an open reading: ${where()}`);
+						assert.ok((shown.seen?.sampledMs ?? -Infinity) >= lastSuccessAt, `a block shown from a reading that a success disproved: ${where()}`);
+						if (!carried.has(details.key ?? "")) assert.ok(blockEvidenced(), `a block shown on old evidence: ${where()}`);
 					}
-					else assert.ok((entry?.usedPct ?? 0) >= (details.threshold ?? 0), `a band shown below its threshold: ${where()}`);
+					else assert.ok((shown.seen?.usedPct ?? 0) >= (details.threshold ?? 0), `a band shown below its threshold: ${where()}`);
 					if (details.final) wrapUpShown = (shown.details as { pct?: number }).pct ?? 100;
 				}
-				if (event === "reject" && entry?.exhausted === true && !entry.approximate && lastSample >= lastSuccessAt && !capped) {
-					assert.ok(h.sent.slice(before).some((shown) => (shown.details as { final?: boolean }).final), `a quota rejection on a current block showed no wrap-up: ${where()}`);
+				// With a poller, the rejection's poll reads the block: the wrap-up must show.
+				const evidenced = seed % 2 === 1 || (entry?.exhausted === true && !entry.approximate && blockEvidenced());
+				if (event === "reject" && evidenced && !capped) {
+					assert.ok(h.sent.slice(before).some((shown) => (shown.details as { final?: boolean }).final), `a quota rejection on an evidenced block showed no wrap-up: ${where()}`);
 				}
 				wrapUpQueued = false;
+				carried.clear();
 				seeDrop();
 			} else {
 				h.clock.now += pick([5_000, 30_000, 90_000, 300_000]);

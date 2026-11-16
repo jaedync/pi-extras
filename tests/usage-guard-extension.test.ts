@@ -79,17 +79,22 @@ function setup(model = { provider: "anthropic", id: "claude-sonnet-5" }, idle = 
 	if (warnings) saveGuardConfig({ enabled: true }, configFile);
 	const store = createLimitStore();
 	const pi = fakePi();
-	usageGuard(pi as never, { store, configFile, now: () => NOW });
+	const clock = { now: NOW };
+	usageGuard(pi as never, { store, configFile, now: () => clock.now });
 	const ctx = fakeCtx(pi, model, idle);
-	return { pi, store, ctx, configFile };
+	return { pi, store, ctx, configFile, clock };
 }
 
 test("only successful assistant responses clear stale proxy blocks and remove the old notice", async () => {
-	const { pi, store, ctx } = setup();
+	const { pi, store, ctx, clock } = setup();
 	const entries = parseProxyQuota({ buckets: [{ type: "five_hour", utilization: 0.03, resetsAt: RESET, status: "rejected" }] });
 	store.set("anthropic", { entries, atMs: NOW - 1000, source: "poll" });
+	// A kept "rejected" status at a low percent needs a quota rejection to count as a block.
+	await pi.handlers.get("message_end")!({ message: { role: "assistant", provider: "anthropic", model: ctx.model.id, stopReason: "error", errorMessage: '{"error":{"type":"rate_limit_error","retry_after":7200}}' } }, ctx);
 	const blocked = await request(pi, ctx);
 	assert.match(blocked.messages[0].content, /blocked by the provider/);
+	// A success at the same instant as the rejection does not clear it.
+	clock.now += 1_000;
 	for (const stopReason of ["error", "aborted"]) {
 		await pi.handlers.get("message_end")!({ message: { role: "assistant", provider: "anthropic", model: ctx.model.id, stopReason } }, ctx);
 		assert.equal(store.get("anthropic")?.entries[0].exhausted, true);
