@@ -2,6 +2,30 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.45.2 - 2026-11-16
+
+### Fixed
+
+- Usage Guard: after a granted (banked) reset, a session could tell the agent
+  that the window was "blocked by the provider (100% used)" and to stop at a
+  checkpoint, from a reading taken before the reset.
+  - A final warning from a reading older than 60 s first gets one forced poll.
+  - A block warning needs a reading that shows the block, sampled in the last
+    60 s, with no successful response since. A quota rejection names no
+    window: it starts a poll, and the new reading decides. There is no block
+    warning below 95% used: a proxy can keep an old "rejected" status there,
+    and the provider's own error still reports a real block. A 429 with a
+    `retry_after` under 15 minutes is a burst limit and does not count.
+  - A warning is shown and recorded at the end of its turn only when the
+    newest reading still supports it, and a shown block leaves later
+    requests when its evidence no longer holds.
+  - A window that reads 50 points below the reading that fired its warnings,
+    in the same reset cycle, arms them again, so a real 95% or block later in
+    that cycle still warns. Keys from older versions re-arm too.
+- Limit store: a proxy that keeps its last rejection after a granted reset no
+  longer keeps the window blocked when it reads 50 points lower with the same
+  reset, also after a later rejection of another window.
+
 ## 0.45.1 - 2026-11-15
 
 ### Added
