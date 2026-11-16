@@ -21,7 +21,6 @@ import { routedModel } from "../lib/routed-model.ts";
 import { createDollarsCollector, type DollarsCollector } from "../lib/usage-dollars/collect.ts";
 import {
 	FRESH_EVIDENCE_MS,
-	CYCLE_TOLERANCE_MS,
 	entryApplies,
 	hotProviders,
 	isUnmetered,
@@ -168,24 +167,13 @@ interface Queued {
  */
 const BURST_RETRY_SECONDS = 15 * 60;
 
-/** Below this percent a "rejected" status may be one that a proxy kept: the block needs a rejection that names the window. */
+/**
+ * A block warning needs an exact reading at or above this percent, or none.
+ * Below it a "rejected" status can be one that a proxy kept after a granted
+ * reset (Meridian), and a quota rejection names no window, so a low-percent
+ * block is left to the provider's own error: a false block stops the agent.
+ */
 const NEAR_FULL_PCT = 95;
-
-/** Meridian clamps `retry_after` at 24 h (src/proxy/retryAfter.ts): a clamped value only says the reset is a day or more away. */
-const RETRY_CLAMP_SECONDS = 24 * 3600;
-
-interface Rejection {
-	atMs: number;
-	retryAfterSeconds?: number;
-}
-
-/** True when the rejection's retry time ends at the window's reset, the only way a 429 names its window. */
-function rejectionNames(rejection: Rejection, resetMs: number | undefined): boolean {
-	if (rejection.retryAfterSeconds === undefined || resetMs === undefined) return false;
-	const retryMs = rejection.retryAfterSeconds * 1000;
-	if (Math.abs(rejection.atMs + retryMs - resetMs) <= CYCLE_TOLERANCE_MS) return true;
-	return rejection.retryAfterSeconds >= RETRY_CLAMP_SECONDS && resetMs - rejection.atMs >= RETRY_CLAMP_SECONDS * 1000 - CYCLE_TOLERANCE_MS;
-}
 
 /** The percent a fired key stands for when its entry has none (older versions): a block is 100, a band its threshold. */
 function keyPct(key: string): number | undefined {
@@ -213,8 +201,6 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	 * shows each one that the newest reading still supports and drops the rest.
 	 */
 	let queued: Queued[] = [];
-	/** By limit family: the last quota rejection, and when its retry time ends, which names its window. */
-	const rejections = new Map<string, Rejection>();
 	/** By limit family, then model id: when a response last succeeded, which disproves an older block. */
 	const succeededAt = new Map<string, Map<string, number>>();
 	/** Limit families with a quota rejection that no turn end has handled yet. */
@@ -264,18 +250,14 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 
 	/**
 	 * Only a reading names a blocked window: a quota rejection starts a poll
-	 * (showRejected) but is no evidence alone. The reading must be fresh, and
-	 * no success of a governed model may come after it. A proxy can keep a
-	 * window's last "rejected" status under a newer, lower percent (Meridian
-	 * after a granted reset), so a block below near-full also needs a fresh
-	 * quota rejection whose retry time names that window.
+	 * (showRejected) but is no evidence alone. The reading must be fresh, no
+	 * success of a governed model may come after it, and an exact percent must
+	 * be near full (NEAR_FULL_PCT).
 	 */
 	function blockEvidenced(provider: string, entry: Warning["entry"], sampled: number): boolean {
 		if (now() - sampled > FRESH_EVIDENCE_MS || succeededAfter(provider, entry.modelFamily, sampled)) return false;
 		const pct = entry.approximate ? undefined : entry.usedPct;
-		if (pct === undefined || pct >= NEAR_FULL_PCT) return true;
-		const rejection = rejections.get(provider);
-		return rejection !== undefined && now() - rejection.atMs <= FRESH_EVIDENCE_MS && rejectionNames(rejection, entry.resetMs);
+		return pct === undefined || pct >= NEAR_FULL_PCT;
 	}
 
 	function supported(warning: Warning): boolean {
@@ -581,7 +563,6 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 
 	pi.on("session_start", async (_event, ctx) => {
 		closed = false;
-		rejections.clear();
 		succeededAt.clear();
 		rejectedInRun.clear();
 		confirmAskedAt.clear();
@@ -610,7 +591,6 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		const limit = message.stopReason === "error" ? parseRateLimit(message.errorMessage) : undefined;
 		// A burst limit does not name a quota window, so it is no evidence that one is blocked.
 		if (!limit || (limit.retryAfterSeconds !== undefined && limit.retryAfterSeconds < BURST_RETRY_SECONDS)) return;
-		rejections.set(family, { atMs: now(), ...(limit.retryAfterSeconds !== undefined ? { retryAfterSeconds: limit.retryAfterSeconds } : {}) });
 		rejectedInRun.add(family);
 		store.recordRejection(family, message.model, now());
 	});

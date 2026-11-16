@@ -89,12 +89,11 @@ test("only successful assistant responses clear stale proxy blocks and remove th
 	const { pi, store, ctx, clock } = setup();
 	const entries = parseProxyQuota({ buckets: [{ type: "five_hour", utilization: 0.03, resetsAt: RESET, status: "rejected" }] });
 	store.set("anthropic", { entries, atMs: NOW - 1000, source: "poll" });
-	// A kept "rejected" status at a low percent needs a quota rejection whose retry time names the window.
-	const retryAfter = Math.round((RESET - NOW) / 1000);
-	await pi.handlers.get("message_end")!({ message: { role: "assistant", provider: "anthropic", model: ctx.model.id, stopReason: "error", errorMessage: `{"error":{"type":"rate_limit_error","retry_after":${retryAfter}}}` } }, ctx);
-	const blocked = await request(pi, ctx);
-	assert.match(blocked.messages[0].content, /blocked by the provider/);
-	// A success at the same instant as the rejection does not clear it.
+	// An older version showed a block from such a reading.
+	const old = { role: "custom", customType: "usage-guard", content: "Usage warning: anthropic 5h is blocked by the provider.", display: true,
+		details: { key: `anthropic|five_hour|x|${RESET}`, provider: "anthropic", reason: "exhausted", final: true } };
+	const first = await request(pi, ctx, [old]);
+	assert.deepEqual(first.messages, [], "a kept status below 95% is no block, and the old notice leaves the request");
 	clock.now += 1_000;
 	for (const stopReason of ["error", "aborted"]) {
 		await pi.handlers.get("message_end")!({ message: { role: "assistant", provider: "anthropic", model: ctx.model.id, stopReason } }, ctx);
@@ -103,7 +102,7 @@ test("only successful assistant responses clear stale proxy blocks and remove th
 	await pi.handlers.get("message_end")!({ message: { role: "assistant", provider: "anthropic", model: ctx.model.id, stopReason: "toolUse" } }, ctx);
 	assert.equal(store.get("anthropic")?.entries[0].exhausted, false);
 	assert.equal(store.get("anthropic")?.atMs, NOW - 1000);
-	assert.deepEqual((await request(pi, ctx, blocked.messages)).messages, []);
+	assert.deepEqual((await request(pi, ctx, [old])).messages, []);
 	const report = JSON.parse((await pi.tool!.execute("t", {}, undefined, undefined, ctx)).content[0].text);
 	assert.equal(report.limits[0].status, "ok");
 });

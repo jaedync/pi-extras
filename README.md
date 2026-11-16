@@ -1041,11 +1041,10 @@ a window, because requests stop at the cap.
     poll at the end of its turn, and the block warnings that the new reading
     supports show then. A proxy samples the window that rejected the request.
   - A proxy can keep a window's last "rejected" status under a newer, lower
-    percent (Meridian does after a granted reset). A block below 95% therefore
-    also needs a quota rejection in the last 60 s whose `retry_after` names
-    the window: it ends within 10 minutes of the window's reset, or it is
-    Meridian's 24 h cap and the window resets a day or more away. A rejection
-    with no `retry_after` names no window.
+    percent (Meridian does after a granted reset), and a quota rejection
+    names no window. So Usage Guard never warns about a block below 95% used.
+    The provider's own error still reports such a block. A block with no exact
+    percent counts as full.
   - A rejection is recorded on every window of the provider, so the record
     keeps the highest percent of the cycle: a granted reset stays cleared
     after a later rejection of another window.

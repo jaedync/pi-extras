@@ -231,22 +231,19 @@ test("after a granted reset a provider block warns again", async () => {
 	assert.equal(h.sent.length, 2);
 });
 
-test("a block at a low percent does not re-arm when the request succeeds and fails again", async () => {
+test("a block below 95% never warns, also at quota rejections: a proxy can keep an old status", async () => {
 	const h = harness();
 	await h.on("session_start")({}, h.ctx);
 	h.clock.now = GRANT;
 	reading(h.store, 3, true, h.clock.now);
-	assert.deepEqual(await h.request(), [], "a kept status at a low percent waits for a quota rejection");
+	assert.deepEqual(await h.request(), []);
 	await rejectTurn(h);
-	assert.equal((h.sent as Sent[])[0]?.details?.reason, "exhausted");
 	h.clock.now += 10_000;
 	await endTurn(h);
 	reading(h.store, 3, true, h.clock.now);
 	assert.deepEqual(await h.request(), []);
 	await rejectTurn(h);
-	assert.deepEqual(await h.request(), [], "one wrap-up per cycle");
-	await rejectTurn(h);
-	assert.equal(h.sent.length, 1);
+	assert.deepEqual(h.sent, []);
 });
 
 test("a proxy that keeps its last rejection after a granted reset does not keep the window blocked", async () => {
@@ -513,11 +510,11 @@ test("review 4.2: a new runtime's first reading after a grant, 0% with the proxy
 	assert.deepEqual((await h.request()).map((notice) => notice.details?.reason), [], "no block enters the request");
 	await endTurn(h);
 	assert.deepEqual(h.sent, []);
-	// A real block at a low percent still shows at its quota rejection.
+	// A quota rejection does not make it a block either.
 	h.clock.now += 10_000;
 	reading(h.store, 0, true, h.clock.now);
 	await rejectTurn(h);
-	assert.equal((h.sent as Sent[])[0]?.details?.reason, "exhausted");
+	assert.deepEqual(h.sent, []);
 });
 
 async function failWith(h: Harness, errorMessage: string): Promise<void> {
@@ -528,7 +525,7 @@ async function failWith(h: Harness, errorMessage: string): Promise<void> {
 
 const sevenDay = (h: Harness) => h.store.get("anthropic")?.entries.find((entry) => (entry.key ?? entry.label) === "seven_day");
 
-test("review 5.1: a rejection names its window by its retry time, so a kept 7d status at 0% is no block", async () => {
+test("review 5.1: a kept 7d status below 95% is no block, whatever retry time the rejection carries", async () => {
 	// A: the 5h window rejects while the OAuth figure lags at 93%, and 7d keeps its old status at 0%.
 	const lagging = harness({ refresher: (store, now) => bothWindows(store, [93, true], [0, true], now) });
 	await lagging.on("session_start")({}, lagging.ctx);
@@ -552,14 +549,14 @@ test("review 5.1: a rejection names its window by its retry time, so a kept 7d s
 	await failWith(unnamed, '{"error":{"type":"rate_limit_error"}}');
 	assert.deepEqual(shownKeys(unnamed), []);
 
-	// A real 7d block below 95%: the retry time ends at the 7d reset, or at Meridian's 24 h clamp.
+	// Not even when the retry time ends at the 7d reset, or is Meridian's 24 h clamp.
 	for (const retry of [Math.round((RESET - unnamed.clock.now) / 1000), 86_400]) {
 		const named = harness({ refresher: (store, now) => bothWindows(store, [40, false], [30, true], now) });
 		await named.on("session_start")({}, named.ctx);
 		named.clock.now = unnamed.clock.now;
 		bothWindows(named.store, [40, false], [30, true], named.clock.now);
 		await failWith(named, `{"error":{"type":"rate_limit_error","retry_after":${retry}}}`);
-		assert.deepEqual(shownKeys(named), [`anthropic|seven_day|x|${RESET}`], `retry_after ${retry}`);
+		assert.deepEqual(shownKeys(named), [], `retry_after ${retry}`);
 	}
 });
 
@@ -619,12 +616,12 @@ const windowOf = (key: string | undefined): string => (key ?? "").split("|").sli
  * - truth: a block is shown or carried only while its window is blocked, or at
  *   most FRESH_MS after its grant;
  * - a block enters a request, new or from history, only on a sample at most
- *   FRESH_MS old and no older than the last success; below 95%, also on a
- *   quota rejection at most FRESH_MS old whose retry time names the window;
+ *   FRESH_MS old, no older than the last success, and at 95% or more;
  * - a shown notice matches its window's reading when it is shown;
  * - each shown key was recorded first, and no key is shown twice without a
  *   re-arm between;
- * - with a poller, a quota rejection shows a wrap-up for its window;
+ * - with a poller, a quota rejection shows a wrap-up for its window when the
+ *   new reading is at 95% or more;
  * - after a grant, a reading at the top band, or a fresh block, warns again.
  */
 test("property: over random event orders, warnings follow the newest evidence and re-arm after each grant", async () => {
@@ -637,7 +634,6 @@ test("property: over random event orders, warnings follow the newest evidence an
 		const blockEndedAt: Record<WindowKey, number> = { five_hour: -Infinity, seven_day: -Infinity };
 		let answer: { buckets: unknown[]; sampledMs: number } | undefined;
 		let lastSuccessAt = -Infinity;
-		let rejection: { at: number; named: Set<string> } | undefined;
 		// By window: the percent of the shown wrap-up; the guard re-arms when it sees a reading 50 points lower.
 		const wrapUpShown = new Map<string, number>();
 		const wrapUpQueued = new Set<string>();
@@ -679,7 +675,7 @@ test("property: over random event orders, warnings follow the newest evidence an
 			if (!entry?.exhausted) return false;
 			const sampled = entry.sampledMs ?? -Infinity;
 			if (h.clock.now - sampled > FRESH_MS || sampled < lastSuccessAt) return false;
-			return (entry.usedPct ?? 100) >= 95 || (rejection !== undefined && h.clock.now - rejection.at <= FRESH_MS && rejection.named.has(window));
+			return (entry.usedPct ?? 100) >= 95;
 		};
 		const truthBlocked = (window: string) => {
 			const known = window as WindowKey;
@@ -693,7 +689,6 @@ test("property: over random event orders, warnings follow the newest evidence an
 		};
 		const forget = () => {
 			lastSuccessAt = -Infinity;
-			rejection = undefined;
 			wrapUpQueued.clear();
 			carried.clear();
 		};
@@ -773,15 +768,10 @@ test("property: over random event orders, warnings follow the newest evidence an
 					if (!failed) lastSuccessAt = h.clock.now;
 					let errorMessage: string | undefined;
 					if (event === "burst") errorMessage = BURST_ERROR;
-					else if (event === "unnamed") {
-						errorMessage = '{"error":{"type":"rate_limit_error"}}';
-						rejection = { at: h.clock.now, named: new Set() };
-					} else if (source) {
+					else if (event === "unnamed") errorMessage = '{"error":{"type":"rate_limit_error"}}';
+					else if (source) {
 						const retry = Math.min(RETRY_CLAMP_S, Math.round((PROPERTY_RESETS[source] - h.clock.now) / 1000));
 						errorMessage = `{"error":{"type":"rate_limit_error","retry_after":${retry}}}`;
-						const named = new Set<string>([source]);
-						if (retry >= RETRY_CLAMP_S) for (const window of WINDOWS) if (PROPERTY_RESETS[window] - h.clock.now >= RETRY_CLAMP_S * 1000 - 600_000) named.add(window);
-						rejection = { at: h.clock.now, named };
 					}
 					await h.on("message_end")({ message: { role: "assistant", provider: "anthropic", model: MODEL.id, stopReason: failed ? "error" : "toolUse", ...(errorMessage ? { errorMessage } : {}) } }, h.ctx);
 				}
@@ -800,8 +790,8 @@ test("property: over random event orders, warnings follow the newest evidence an
 					else assert.ok((shown.seen?.usedPct ?? 0) >= (details.threshold ?? 0), `a band shown below its threshold: ${where()}`);
 					if (details.final) wrapUpShown.set(window, details.pct ?? 100);
 				}
-				// With a poller, a named quota rejection reads its window's block: its wrap-up must show.
-				if (event === "reject" && source && seed % 2 === 1 && !capped && h.sent.length >= before) {
+				// With a poller, a quota rejection reads its window's block: at 95% or more its wrap-up must show.
+				if ((event === "reject" || event === "unnamed") && source && seed % 2 === 1 && !capped && (entryOf(source)?.usedPct ?? 100) >= 95) {
 					assert.ok(h.sent.slice(before).some((shown) => windowOf(shown.details?.key) === source && (shown.details as { final?: boolean }).final) || wrapUpShown.has(source),
 						`a quota rejection of ${source} showed no wrap-up: ${where()}`);
 				}
