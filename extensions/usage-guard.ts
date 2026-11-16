@@ -155,11 +155,10 @@ export interface UsageGuardOptions {
  */
 const POLL_BUDGET_MS = 2_000;
 
-/** A notice in a request, with the sample time of its reading and of its newest evidence. */
+/** A notice in a request, with the sample time of its reading. */
 interface Queued {
 	notice: CustomMessage;
 	sampledMs: number;
-	evidenceMs: number;
 }
 
 export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions = {}): void {
@@ -216,10 +215,13 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		}
 	}
 
+	function sampledAt(warning: Warning): number {
+		return warning.entry.sampledMs ?? store.get(warning.provider)?.atMs ?? -Infinity;
+	}
+
 	/** The newest evidence for a warning: its reading's sample time, or a quota rejection seen here. */
 	function evidenceAt(warning: Warning): number {
-		const sampled = warning.entry.sampledMs ?? store.get(warning.provider)?.atMs ?? -Infinity;
-		return Math.max(sampled, rejectedAt.get(warning.provider) ?? -Infinity);
+		return Math.max(sampledAt(warning), rejectedAt.get(warning.provider) ?? -Infinity);
 	}
 
 	/** True when a model that the window governs got a response after `since`. */
@@ -232,11 +234,20 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 
 	/**
 	 * Old evidence of a block waits for the request: a real block rejects it,
-	 * which is fresh evidence. A success after the evidence disproves it.
+	 * which is fresh evidence. A success after the reading disproves its block
+	 * until a newer reading: a rejection does not name its window (it can be a
+	 * per-minute limit), so it cannot bring that block back.
 	 */
 	function supported(warning: Warning): boolean {
 		if (warning.reason !== "exhausted") return true;
-		return fresh(warning) && !succeededAfter(warning.provider, warning.entry.modelFamily, evidenceAt(warning));
+		return fresh(warning) && !succeededAfter(warning.provider, warning.entry.modelFamily, sampledAt(warning));
+	}
+
+	/** A shown block notice whose reading a later success disproved. Older notices carry no sample time. */
+	function disprovedBlock(details: unknown): boolean {
+		const record = details as { reason?: unknown; provider?: unknown; modelFamily?: unknown; sampledMs?: unknown } | undefined;
+		if (record?.reason !== "exhausted" || typeof record.provider !== "string" || typeof record.sampledMs !== "number") return false;
+		return succeededAfter(record.provider, typeof record.modelFamily === "string" ? record.modelFamily : undefined, record.sampledMs);
 	}
 
 	function fresh(warning: Warning): boolean {
@@ -265,11 +276,11 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		queued = [];
 		const model = activeModel(ctx);
 		const snapshot = model.provider ? store.get(limitKey(model.provider)) : undefined;
-		for (const { notice, sampledMs, evidenceMs } of items) {
+		for (const { notice, sampledMs } of items) {
 			const details = notice.details as { key: string; pct?: number; provider: string; modelFamily?: string; reason: string };
 			// Only a reading at least as new as the one that fired the notice, and not approximate, can disprove it.
 			const newer = snapshot && { ...snapshot, entries: snapshot.entries.filter((entry) => !entry.approximate && (entry.sampledMs ?? snapshot.atMs) >= sampledMs) };
-			const disproved = details.reason === "exhausted" && succeededAfter(details.provider, details.modelFamily, evidenceMs);
+			const disproved = details.reason === "exhausted" && succeededAfter(details.provider, details.modelFamily, sampledMs);
 			if (disproved || !warningApplies(notice.details, model, now(), newer, budget ?? null)) {
 				fired.delete(details.key);
 				firedPct.delete(details.key);
@@ -371,8 +382,9 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	 * the request that met the block may have been built on an older reading.
 	 */
 	function showRejected(ctx: ExtensionContext): void {
-		if (!rejectedInRun.size) return;
-		rejectedInRun.clear();
+		const provider = activeModel(ctx).provider;
+		// Another family's rejection waits for a turn end on that family: evaluate sees only the active one.
+		if (!provider || !rejectedInRun.delete(limitKey(provider))) return;
 		evaluate(ctx, true, (warning) => warning.reason === "exhausted");
 		flush(ctx);
 	}
@@ -388,6 +400,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 			return pendingWarnings(snapshots, model, config, budget, fired, now()).filter((warning) => only(warning) && supported(warning)).map((warning) => {
 				// A block counts as 100% when its reading has no exact percent, so a granted reset can re-arm it.
 				const pct = warning.entry.approximate ? (warning.reason === "exhausted" ? warning.entry.usedPct ?? 100 : undefined) : warning.entry.usedPct;
+				const sampledMs = sampledAt(warning);
 				const notice: CustomMessage = {
 					role: "custom", customType: GUARD_CUSTOM_TYPE, display: true, timestamp: now(),
 					content: warningMessage(warning, config, now()),
@@ -395,14 +408,14 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 						key: warning.key, provider: warning.provider, modelFamily: warning.entry.modelFamily,
 						threshold: warning.threshold, reason: warning.reason, final: warning.final,
 						...(pct !== undefined ? { pct } : {}),
+						...(Number.isFinite(sampledMs) ? { sampledMs } : {}),
 					},
 				};
 				fired.add(warning.key);
 				firedPct.set(warning.key, pct);
 				// The returned projection reaches this request now. The turn end shows and
 				// records it, if a newer reading has not disproved it by then (flush).
-				const sampledMs = warning.entry.sampledMs ?? store.get(warning.provider)?.atMs ?? -Infinity;
-				queued.push({ notice, sampledMs, evidenceMs: evidenceAt(warning) });
+				queued.push({ notice, sampledMs });
 				return notice;
 			});
 		} catch (error) {
@@ -572,7 +585,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		const model = activeModel(ctx);
 		return {
 			messages: [...event.messages.filter((message) => message.role !== "custom" ||
-				message.customType !== GUARD_CUSTOM_TYPE || warningApplies(message.details, model, now(), (model.provider ? store.get(limitKey(model.provider)) : undefined), budget ?? null)), ...notices],
+				message.customType !== GUARD_CUSTOM_TYPE || !disprovedBlock(message.details) && warningApplies(message.details, model, now(), (model.provider ? store.get(limitKey(model.provider)) : undefined), budget ?? null)), ...notices],
 		};
 	});
 

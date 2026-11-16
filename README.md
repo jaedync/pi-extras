@@ -1034,7 +1034,10 @@ a window, because requests stop at the cap.
   forced poll (at most once a minute per provider, within the 2 s poll
   budget). A provider block also needs that fresh evidence: a reading sampled,
   or a quota rejection seen, at most 60 s before, and no successful response
-  of a model that the window governs since then. A block that nothing fresh
+  of a model that the window governs since that reading was sampled. A
+  rejection does not name its window (it can be a per-minute limit), so it
+  does not bring back a block that a success disproved: only a newer reading
+  does. A shown block leaves later requests after such a success. A block that nothing fresh
   confirms waits for the request itself: a real block rejects it, and the
   rejection shows the block warning at the end of that turn. A warning is
   shown and recorded at the end of its turn, and only when the newest reading

@@ -258,10 +258,45 @@ test("review 1: a request that succeeds disproves a block notice from a reading 
 	assert.deepEqual(await h.request(), [], "nor does it enter the next request from the same reading");
 	await endTurn(h);
 	assert.deepEqual(h.sent, []);
-	// A newer rejection is evidence again.
+	// A rejection does not name its window, so it does not bring back a block that a success disproved.
 	h.clock.now += 10_000;
 	await rejectTurn(h);
-	assert.equal((h.sent as Sent[]).at(-1)?.details?.reason, "exhausted");
+	assert.deepEqual(h.sent, []);
+	// A newer rejected reading is evidence again.
+	reading(h.store, 100, true, h.clock.now);
+	assert.equal((await h.request())[0]?.details?.reason, "exhausted");
+});
+
+test("review 2.1: a transient 429 after a success does not bring back a disproved pre-grant block", async () => {
+	const h = harness();
+	await h.on("session_start")({}, h.ctx);
+	reading(h.store, 100, true, GRANT - 90_000);
+	h.clock.now = GRANT + 100_000;
+	assert.deepEqual(await h.request(), []);
+	await endTurn(h);
+	h.clock.now += 20_000;
+	assert.deepEqual(await h.request(), []);
+	// A per-minute burst limit, not the weekly window.
+	await h.on("message_end")({ message: { role: "assistant", provider: "anthropic", model: MODEL.id, stopReason: "error", errorMessage: '{"error":{"type":"rate_limit_error","retry_after":20}}' } }, h.ctx);
+	await h.on("turn_end")({ toolResults: [] }, h.ctx);
+	assert.deepEqual(h.sent, [], "no block is shown");
+	h.clock.now += 20_000;
+	assert.deepEqual(await h.request(), [], "the retry carries no block");
+});
+
+test("review 2.1: a shown block leaves later requests once a success comes after its reading", async () => {
+	const h = harness();
+	await h.on("session_start")({}, h.ctx);
+	h.clock.now = GRANT;
+	reading(h.store, 100, true, h.clock.now - 5_000);
+	await h.request();
+	await rejectTurn(h);
+	assert.equal(h.sent.length, 1);
+	const shown = { role: "custom", customType: "usage-guard", content: h.sent[0].content, details: h.sent[0].details };
+	h.clock.now += 30_000;
+	await endTurn(h);
+	const result = await h.on("context")({ messages: [shown] }, h.ctx) as { messages: unknown[] };
+	assert.deepEqual(result.messages, [], "the success disproved the block in history");
 });
 
 test("review 2: a block that fired from an approximate reading arms again after a granted reset", async () => {
@@ -309,6 +344,20 @@ test("review 4: a band notice is not dropped by a reading older than the one tha
 		assert.equal(h.sent.length, 1, `the notice the model saw is shown (${lower} reading)`);
 		assert.deepEqual(await h.request(), [], "and does not enter the next request again");
 	}
+});
+
+test("review 2.3: a rejection waits for a turn end on its own family after a model switch", async () => {
+	const h = harness();
+	await h.on("session_start")({}, h.ctx);
+	h.clock.now = GRANT;
+	reading(h.store, 100, true, h.clock.now - 180_000);
+	await h.on("message_end")({ message: { role: "assistant", provider: "anthropic", model: MODEL.id, stopReason: "error", errorMessage: QUOTA_ERROR } }, h.ctx);
+	const other = { ...h.ctx, model: { provider: "openai-codex", id: "gpt-6-luna" } };
+	await h.on("turn_end")({ toolResults: [] }, other);
+	assert.deepEqual(h.sent, [], "the other family's turn end shows nothing");
+	h.clock.now += 5_000;
+	await h.on("agent_end")({ messages: [] }, h.ctx);
+	assert.equal((h.sent as Sent[])[0]?.details?.reason, "exhausted", "the anthropic block is shown on its own family");
 });
 
 function random(seed: number): () => number {
@@ -379,11 +428,12 @@ test("property: over random event orders, warnings follow the newest evidence an
 				const evidence = Math.max(lastSample, lastRejectAt);
 				for (const notice of notices) {
 					const details = notice.details as { final?: boolean; reason?: string; threshold?: number };
-					if (details.reason === "exhausted") assert.ok(h.clock.now - evidence <= FRESH_MS && evidence >= lastSuccessAt, `block notice on old or disproved evidence: ${where()}`);
+					if (details.reason === "exhausted") assert.ok(h.clock.now - evidence <= FRESH_MS && lastSample >= lastSuccessAt, `block notice on old or disproved evidence: ${where()}`);
 					if (details.final) wrapUpQueued = true;
 				}
 				// A success after the evidence disproves a block.
-				const fresh = h.clock.now - evidence <= FRESH_MS && evidence >= lastSuccessAt;
+				// A rejection does not name its window: only a newer reading brings a disproved block back.
+				const fresh = h.clock.now - evidence <= FRESH_MS && lastSample >= lastSuccessAt;
 				// A block is due only on fresh evidence; a top band on any reading.
 				const due = entry !== undefined && !entry.approximate && (entry.exhausted === true ? fresh : (entry.usedPct ?? 0) >= 95);
 				if (due && wrapUpShown === undefined && !wrapUpQueued) {
@@ -399,7 +449,10 @@ test("property: over random event orders, warnings follow the newest evidence an
 				const entry = h.store.get("anthropic")?.entries[0];
 				for (const shown of h.sent.slice(before)) {
 					const details = shown.details as { final?: boolean; reason?: string; threshold?: number };
-					if (details.reason === "exhausted") assert.equal(entry?.exhausted, true, `a block shown on an open window: ${where()}`);
+					if (details.reason === "exhausted") {
+						assert.equal(entry?.exhausted, true, `a block shown on an open window: ${where()}`);
+						assert.ok(lastSample >= lastSuccessAt, `a block shown from a reading that a success disproved: ${where()}`);
+					}
 					else assert.ok((entry?.usedPct ?? 0) >= (details.threshold ?? 0), `a band shown below its threshold: ${where()}`);
 					if (details.final) wrapUpShown = (shown.details as { pct?: number }).pct ?? 100;
 				}
