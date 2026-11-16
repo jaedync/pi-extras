@@ -1051,6 +1051,8 @@ a window, because requests stop at the cap.
   - A 429 whose `retry_after` is under 15 minutes is a burst limit, not a
     quota window, and is not counted as a quota rejection.
   - A shown block stays in later requests only while that evidence holds.
+    With no reading of its window (a resume before the first poll), only the
+    notice's own sample, at most 60 s old, keeps it.
 - A warning is shown and recorded at the end of its turn, and only when the
   newest reading still supports it; otherwise it is dropped and can fire again
   when it is true. Only an exact reading sampled no earlier than the one that

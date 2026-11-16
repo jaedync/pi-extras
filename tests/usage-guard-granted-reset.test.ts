@@ -584,6 +584,44 @@ test("review 5.1: after a granted 7d reset in the same process, a later 5h rejec
 	assert.equal(sevenDay(h)?.exhausted, false, "the store does not block 7d again (review 5.2)");
 });
 
+async function shownBlock(): Promise<Harness> {
+	const h = harness();
+	await h.on("session_start")({}, h.ctx);
+	h.clock.now = GRANT - 30_000;
+	reading(h.store, 100, true, h.clock.now - 5_000);
+	await h.request();
+	await rejectTurn(h);
+	assert.equal(h.sent.length, 1, "setup: a true block is shown");
+	return h;
+}
+
+test("review 6.1: an old block in history leaves the request when the store has no reading of its window", async () => {
+	// A resume in a new process, before its first poll.
+	const before = await shownBlock();
+	const resumed = harness();
+	resumed.entries.push(...before.entries);
+	resumed.clock.now = GRANT + 100_000;
+	await resumed.on("session_start")({}, resumed.ctx);
+	const empty = await resumed.on("context")({ messages: history(before) }, resumed.ctx) as { messages: unknown[] };
+	assert.deepEqual(empty.messages, [], "no reading");
+
+	// A snapshot that has no entry for the blocked window.
+	const h = await shownBlock();
+	h.clock.now = GRANT + 100_000;
+	const entries = parseProxyQuota({ buckets: [{ type: "five_hour", status: "allowed", utilization: 0.1, resetsAt: RESET5, observedAt: h.clock.now }] }, h.clock.now);
+	h.store.set("anthropic", { entries, atMs: h.clock.now, source: "headers" });
+	const partial = await h.on("context")({ messages: history(h) }, h.ctx) as { messages: unknown[] };
+	assert.deepEqual(partial.messages, [], "no reading of the 7d window");
+});
+
+test("review 6.1: a block shown a moment ago stays in the next request while its own sample is fresh", async () => {
+	const h = await shownBlock();
+	h.clock.now += 20_000;
+	h.store.set("anthropic", { entries: [], atMs: h.clock.now, source: "poll" });
+	const result = await h.on("context")({ messages: history(h) }, h.ctx) as { messages: unknown[] };
+	assert.equal(result.messages.length, 1);
+});
+
 function random(seed: number): () => number {
 	let state = seed >>> 0;
 	return () => {
@@ -613,8 +651,9 @@ const windowOf = (key: string | undefined): string => (key ?? "").split("|").sli
  * retry time (the time to that window's reset, clamped at 24 h), or with no
  * retry time. Also: successes, turn ends, run ends with no turn end, burst
  * 429s, resumes, new processes and clock steps. Checks, for every order:
- * - truth: a block is shown or carried only while its window is blocked, or at
- *   most FRESH_MS after its grant;
+ * - truth: a block is shown or carried only while its window is blocked or at
+ *   95% or more (a final warning is due there anyway), or at most FRESH_MS
+ *   after its grant;
  * - a block enters a request, new or from history, only on a sample at most
  *   FRESH_MS old, no older than the last success, and at 95% or more;
  * - a shown notice matches its window's reading when it is shown;
@@ -625,6 +664,8 @@ const windowOf = (key: string | undefined): string => (key ?? "").split("|").sli
  * - after a grant, a reading at the top band, or a fresh block, warns again.
  */
 test("property: over random event orders, warnings follow the newest evidence and re-arm after each grant", async () => {
+	// Wrap-ups that entered a request after a re-arm of their window: the re-arm clause must run.
+	let dueAfterRearm = 0;
 	for (let seed = 1; seed <= 1000; seed++) {
 		const rand = random(seed);
 		const pick = <T,>(items: readonly T[]): T => items[Math.floor(rand() * items.length)];
@@ -677,9 +718,10 @@ test("property: over random event orders, warnings follow the newest evidence an
 			if (h.clock.now - sampled > FRESH_MS || sampled < lastSuccessAt) return false;
 			return (entry.usedPct ?? 100) >= 95;
 		};
+		// Accepted: at 95% or more a final warning is due anyway, so a kept "rejected" status there only changes its words.
 		const truthBlocked = (window: string) => {
 			const known = window as WindowKey;
-			return truth[known]?.rejected === true || h.clock.now - (blockEndedAt[known] ?? -Infinity) <= FRESH_MS;
+			return truth[known]?.rejected === true || (truth[known]?.pct ?? 0) >= 95 || h.clock.now - (blockEndedAt[known] ?? -Infinity) <= FRESH_MS;
 		};
 		const seeDrop = () => {
 			for (const [window, pct] of wrapUpShown) {
@@ -693,7 +735,7 @@ test("property: over random event orders, warnings follow the newest evidence an
 			carried.clear();
 		};
 		for (let step = 0; step < 40; step++) {
-			let event = pick(["poll", "poll", "cached", "sdk", "grant", "request", "request", "turn", "success", "reject", "reject", "unnamed", "burst", "agentEnd", "resume", "newProcess", "tick"] as const);
+			let event = pick(["poll", "poll", "climb", "cached", "sdk", "grant", "request", "request", "turn", "success", "reject", "reject", "unnamed", "burst", "agentEnd", "resume", "newProcess", "tick"] as const);
 			const blocked = WINDOWS.filter((window) => truth[window].rejected);
 			// A quota rejection comes only from a blocked window.
 			if ((event === "reject" || event === "unnamed") && !blocked.length) event = "burst";
@@ -704,6 +746,13 @@ test("property: over random event orders, warnings follow the newest evidence an
 					truth[window] = { pct, rejected: pct >= 100 };
 					lag[window] = pick([0, 0, 3, 10]);
 				}
+				serve(h.store, h.clock.now);
+			} else if (event === "climb") {
+				// One window rises fast to its top band or its limit, and the proxy is polled.
+				const window = pick(WINDOWS);
+				const pct = Math.max(truth[window].pct, pick([95, 97, 100]));
+				truth[window] = { pct, rejected: pct >= 100 };
+				lag[window] = 0;
 				serve(h.store, h.clock.now);
 			} else if (event === "cached") {
 				// The proxy serves its last answer again, with its old sample time.
@@ -747,7 +796,10 @@ test("property: over random event orders, warnings follow the newest evidence an
 				}
 				for (const notice of notices) {
 					const window = windowOf(notice.details?.key);
-					if ((notice.details as { final?: boolean }).final) wrapUpQueued.add(window);
+					if ((notice.details as { final?: boolean }).final) {
+						wrapUpQueued.add(window);
+						if (h.log.some((item) => item.startsWith("rearmed:") && windowOf(item.slice("rearmed:".length)) === window)) dueAfterRearm += 1;
+					}
 					if (notice.details?.reason === "exhausted") carried.add(notice.details.key ?? "");
 				}
 				for (const window of WINDOWS) {
@@ -804,4 +856,5 @@ test("property: over random event orders, warnings follow the newest evidence an
 			checkLog();
 		}
 	}
+	assert.ok(dueAfterRearm > 0, "no wrap-up came after a re-arm: the generator does not reach the re-arm clause");
 });

@@ -277,7 +277,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		const snapshot = store.get(record.provider);
 		const window = record.key.split("|").slice(1, -2).join("|");
 		const entry = snapshot?.entries.find((candidate) => (candidate.key ?? candidate.label) === window);
-		if (!entry) return false;
+		// No reading of the window proves nothing: only the notice's own fresh sample keeps it.
+		if (!entry) return typeof record.sampledMs !== "number" || now() - record.sampledMs > FRESH_EVIDENCE_MS;
 		return !blockEvidenced(record.provider, entry, entry.sampledMs ?? snapshot?.atMs ?? -Infinity);
 	}
 
