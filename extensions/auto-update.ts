@@ -22,7 +22,9 @@ import { updateEntryView } from "../lib/auto-update/entry-view.ts";
 import { parseChangelog, type NotesEntry } from "../lib/release-notes.ts";
 import { launcherEnv } from "../lib/auto-update/launcher-env.ts";
 import { fileLog } from "../lib/auto-update/log.ts";
-import { EXTRAS_DIR, storePaths, storeRootFrom } from "../lib/auto-update/paths.ts";
+import { changedInPlace } from "../lib/auto-update/in-place.ts";
+import { EXTRAS_DIR, isInside, storePaths, storeRootFrom } from "../lib/auto-update/paths.ts";
+import { processReloadGuard, RELOAD_GUARD_MS } from "../lib/auto-update/reload-guard.ts";
 import { APPLY_COMMAND, STATUS_KEY, UPDATE_ENTRY, UpdateSession, type UpdateEntryData } from "../lib/auto-update/session.ts";
 import { spawnCycle } from "../lib/auto-update/spawn.ts";
 import { updateCommand } from "../lib/auto-update/slash.ts";
@@ -50,6 +52,11 @@ function loadedPaths(pi: ExtensionAPI): string[] {
 }
 
 const FOCUS_WIDGET = "pi-extras-auto-update-focus";
+
+/** The notice for an error that the reload guard caught (lib/auto-update/reload-guard.ts). */
+export function reloadFailureText(error: string): string {
+	return `An extension failed after the update reload: ${error}. Pi keeps running. If a tool or command does not work, restart Pi.`;
+}
 
 /** The version of this copy: a reload loads the new copy, so the "done" entry names the version moved to. */
 function extrasVersion(): string {
@@ -136,6 +143,11 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 		if (isChildSession(context.sessionManager)) return;
 		removeSubcommand?.();
 		removeSubcommand = addSubcommand();
+		// Errors that the guard caught during the reload, before this module started, come now.
+		processReloadGuard().setReporter((text) => {
+			operationalError(errorLog, "auto-update", `extension error after the update reload: ${text}`);
+			context.ui.notify(reloadFailureText(text), "warning");
+		});
 		tui = undefined;
 		if (context.mode === "tui") {
 			// A zero-row widget is the public way to reach the TUI: it tells when a built-in selector has the focus.
@@ -207,6 +219,9 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 				},
 				log,
 				exit: (code) => process.exit(code),
+				// performance.timeOrigin is the start of this process: Node's module cache is as old as that.
+				changedOnDisk: () => changedInPlace(loadedPaths(pi).filter((path) => !isInside(path, paths.root)), performance.timeOrigin),
+				armReloadGuard: () => processReloadGuard().arm(RELOAD_GUARD_MS, log),
 			});
 			session.start(event.reason);
 		} catch (error) {
@@ -272,6 +287,8 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 		session?.stop(event.reason);
 		session = undefined;
 		ctx = undefined;
+		// Only the main session added a reporter; its context goes stale now.
+		if (removeSubcommand) processReloadGuard().setReporter(undefined);
 		removeSubcommand?.();
 		removeSubcommand = undefined;
 	});

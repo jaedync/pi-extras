@@ -80,6 +80,8 @@ export interface AdoptInput {
 	readonly ready: boolean;
 	/** Reloads or restarts this session already made for the current target. */
 	readonly attempts: number;
+	/** Files of loaded packages that changed on disk since the process started (in-place.ts); a reload would mix old and new modules. */
+	readonly changedOnDisk?: readonly string[];
 }
 
 export type Decision =
@@ -98,9 +100,11 @@ export function decide(input: AdoptInput): Decision {
 	if (input.attempts >= MAX_ATTEMPTS) return { kind: "notice", text: `${change} is ready, but this session did not move to it. Restart Pi to use it.` };
 	if (input.adopt === "notice") return { kind: "notice", text: `${change} ready: ${pi ? "restart Pi" : "use /reload"} to use it` };
 	const target = fingerprint(set);
+	const restartable = input.canRestart && input.mode === "tui";
+	if (!pi && restartable && (input.changedOnDisk?.length ?? 0) > 0) return { kind: "restart", target, change, text: `Updating ${change}: restarting, since a loaded package changed on disk` };
 	if (!pi) return { kind: "reload", target, change, text: `Updating ${change}: reloading` };
 	// A restart starts `pi --session <file>`: only the terminal UI can come back that way without losing its client.
-	if (input.canRestart && input.mode === "tui") return { kind: "restart", target, change, text: `Updating ${change}: restarting` };
+	if (restartable) return { kind: "restart", target, change, text: `Updating ${change}: restarting` };
 	return { kind: "notice", text: `Pi ${set.pi.version} ready: restart to use it` };
 }
 

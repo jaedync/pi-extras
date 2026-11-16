@@ -105,6 +105,10 @@ export interface SessionHost {
 	readonly log: (line: string) => void;
 	/** Ends the process at once (process.exit): the last step when Pi's own quit hangs. */
 	readonly exit: (code: number) => void;
+	/** Files of the packages this process loaded that changed on disk after it started (in-place.ts). */
+	readonly changedOnDisk: () => readonly string[];
+	/** Opens or extends the window in which an unhandled rejection is caught, not fatal (reload-guard.ts). */
+	readonly armReloadGuard: () => void;
 }
 
 function realOr(path: string): string {
@@ -151,6 +155,8 @@ export class UpdateSession {
 	private launcherNoticeShown = false;
 	/** Since when a reload or restart to `target` waits for idle. */
 	private waiting: { readonly target: string; readonly since: number } | undefined;
+	/** The in-place check for one target: it walks the disk, so once per target. */
+	private onDisk: { readonly target: string; readonly files: readonly string[] } | undefined;
 
 	constructor(host: SessionHost) {
 		this.host = host;
@@ -272,11 +278,29 @@ export class UpdateSession {
 	decision(state = safeState(this.host.paths)): Decision {
 		if (!state?.current) return { kind: "none" };
 		const target = fingerprint(state.current);
-		return decide({
+		const input = {
 			own: this.own, state, storeRoot: this.host.paths.root, adopt: this.config().adopt, mode: this.host.mode,
 			canRestart: this.canRestart(),
 			ready: this.ready(state), attempts: this.attempts(target),
-		});
+		};
+		const plain = decide(input);
+		if (plain.kind !== "reload") return plain;
+		return decide({ ...input, changedOnDisk: this.changedOnDisk(target) });
+	}
+
+	private changedOnDisk(target: string): readonly string[] {
+		if (this.onDisk?.target === target) return this.onDisk.files;
+		let files: readonly string[];
+		try {
+			files = this.host.changedOnDisk();
+		} catch (error) {
+			// The reload guard still covers the reload.
+			this.host.log(`could not check loaded packages for changes on disk: ${error instanceof Error ? error.message : String(error)}`);
+			files = [];
+		}
+		this.onDisk = { target, files };
+		if (files.length > 0) this.host.log(`loaded packages changed on disk since this process started (a reload would mix old and new modules): ${files.join(", ")}`);
+		return files;
 	}
 
 	private idle(kind: "reload" | "restart"): boolean {
@@ -366,9 +390,12 @@ export class UpdateSession {
 				}, SHUTDOWN_STUCK_MS);
 			}
 		}, RELOAD_STUCK_MS);
+		this.host.armReloadGuard();
 		try {
 			await actions.reload();
 		} finally {
+			// The window runs on from the end of the reload: an extension's async start fails after it.
+			this.host.armReloadGuard();
 			stopWatch();
 			// After a shutdown() that worked, Pi has stopped its TUI and quits whatever the reload does now.
 			// The exit timer stays: if that quit hangs, the process would live on with no screen, and the

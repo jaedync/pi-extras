@@ -270,10 +270,10 @@
 			}
 		},
 		"ts-error-cast": {
-			"count": 122,
+			"count": 121,
 			"files": {
 				"extensions/release-notes.ts": 2,
-				"extensions/shell-jobs.ts": 6,
+				"extensions/shell-jobs.ts": 5,
 				"extensions/status-plus.ts": 3,
 				"extensions/subagents.ts": 2,
 				"extensions/usage-guard.ts": 5,

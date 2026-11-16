@@ -173,6 +173,19 @@ newest versions, run `pi update --all`.
   launcher starts Pi again. In other cases (no launcher, RPC mode, or a
   session with no file), the warning tells you to quit Pi and start it
   again.
+- An extension can fail after the reload. For example, new code can meet an
+  old module that Node keeps in its cache. If the failure is an unhandled
+  rejection, Node usually stops the process. From the start of an update reload until
+  2 minutes after its end, auto-update catches these errors. It writes them to
+  `update.log` and `pi-extras.log`, and shows a warning. Pi keeps running.
+  Restart Pi if a tool or command of that extension does not work.
+- Node keeps `.js`, `.mjs` and `.cjs` modules in its cache by file path, so a
+  reload does not read them again. If a file of a loaded package outside
+  the store changed on disk after Pi started, a package update restarts Pi
+  through the launcher, not a reload. `update.log` names the changed files.
+  Without the launcher, or in RPC mode, the session reloads under the guard
+  above. To change a local package without this risk, install it to a new
+  folder and move a symlink to it.
 - If a new set waits 30 minutes for the session to become idle, the status
   line shows "update ready: waits for idle (/reload to use it)". For a new
   Pi, it shows "restart to use it".

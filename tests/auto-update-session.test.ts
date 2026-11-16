@@ -78,6 +78,20 @@ test("decide: reload for packages, restart for Pi in the TUI under the launcher,
 	assert.deepEqual(decide({ ...pi, canRestart: false }), { kind: "notice", text: "Pi 1.4.1 ready: restart to use it" });
 });
 
+test("decide: a package that changed on disk after it loaded makes a package update a restart, where a restart can happen", () => {
+	const root = "/store";
+	const old = set(root, "1.4.0", "0.29.0");
+	const own = { piVersion: "1.4.0", piDir: old.pi.dir, entries: [old.packages["npm-pi-extras"]!.entry] };
+	const extras: AdoptInput = { own, state: { ...emptyState(), current: set(root, "1.4.0", "0.30.0"), previous: old }, storeRoot: root, adopt: "auto", mode: "tui", canRestart: true, ready: true, attempts: 0, changedOnDisk: ["/x/dist/index.js"] };
+	const restart = decide(extras);
+	assert.equal(restart.kind, "restart");
+	assert.equal((restart as { text: string }).text, "Updating pi-extras 0.29.0 → 0.30.0: restarting, since a loaded package changed on disk");
+	assert.equal(decide({ ...extras, mode: "rpc" }).kind, "reload", "RPC cannot restart: the reload guard covers it");
+	assert.equal(decide({ ...extras, canRestart: false }).kind, "reload");
+	assert.equal(decide({ ...extras, changedOnDisk: [] }).kind, "reload");
+	assert.equal(decide({ ...extras, changedOnDisk: undefined }).kind, "reload");
+});
+
 test("decide: the change names the session's old version also when the old set left the state", () => {
 	const root = "/store";
 	// The session loaded 0.30.0; two cycles later the state holds only 0.30.1 (previous) and 0.30.2 (current).
@@ -116,6 +130,10 @@ interface Harness {
 	readonly exits: number[];
 	/** One-shot timers from `setOnce`, in the order they were set; `advance` fires the due ones. */
 	readonly timeouts: { at: number; fn: () => void; live: boolean }[];
+	/** What `changedOnDisk` returns: files of loaded packages changed in place since the process started. */
+	changed: string[];
+	/** One copy of `calls` for each time the session armed the reload guard. */
+	readonly guards: string[][];
 }
 
 /** Moves the fake clock forward and fires each live one-shot timer that comes due. */
@@ -150,7 +168,7 @@ function harness(t: test.TestContext, own: (root: string) => UpdateSet, current:
 	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: Object.values(mine.packages).map((r) => r.entry) }));
 	const h: Harness = {
 		paths, agentDir, entries: [], statuses: [], notices: [], calls: [], clock: 1_000_000, branch: [], loaded: [], history: new Set(),
-		levels: [], logs: [], exits: [], timeouts: [],
+		levels: [], logs: [], exits: [], timeouts: [], changed: [], guards: [],
 		signals: { agentIdle: true, pendingMessages: false, compacting: false, promptOpen: false, subagentRun: false, background: false, editorEmpty: true, userBash: false },
 		host: undefined as unknown as SessionHost,
 	};
@@ -188,6 +206,8 @@ function harness(t: test.TestContext, own: (root: string) => UpdateSet, current:
 			};
 		},
 		log: (line) => h.logs.push(line),
+		changedOnDisk: () => h.changed,
+		armReloadGuard: () => void h.guards.push([...h.calls]),
 		exit: (code) => {
 			h.calls.push("exit");
 			h.exits.push(code);
@@ -735,4 +755,71 @@ test("a stuck reload whose restart request cannot be written: still a warning, a
 	assert.deepEqual(h.calls, []);
 	assert.equal(restartPending("/sessions/a.jsonl"), false);
 	assert.ok(h.logs.some((line) => line.includes("could not write the restart request")));
+});
+
+test("an update reload arms the reload guard before the reload and again after it ends", async (t) => {
+	const { h, session } = reloadReady(t);
+	await session.apply(actions(h));
+	assert.deepEqual(h.calls, ["reload"]);
+	assert.deepEqual(h.guards, [[], ["reload"]], "armed before the reload, then the window runs from its end");
+});
+
+test("an update reload that fails still arms the guard after it", async (t) => {
+	const { h, session } = reloadReady(t);
+	await assert.rejects(session.apply(stuck(h, async () => {
+		throw new Error("reload broke");
+	})), /reload broke/);
+	assert.equal(h.guards.length, 2);
+});
+
+test("a package update when a loaded package changed on disk: a restart through the launcher, not a reload (incident 2026-11-16)", async (t) => {
+	const { h, session, request } = reloadReady(t);
+	h.changed = ["/release/node_modules/remote-pi/dist/index.js"];
+	session.poll();
+	assert.deepEqual(h.calls, ["dispatch"]);
+	await session.apply(actions(h));
+	assert.deepEqual(h.calls, ["dispatch", "shutdown"]);
+	assert.equal(existsSync(request), true, "the launcher gets a restart request");
+	assert.match(h.entries[0]!.text, /restarting, since a loaded package changed on disk/);
+	assert.ok(h.logs.some((line) => line.includes("/release/node_modules/remote-pi/dist/index.js")), "the log names the changed file");
+	assert.deepEqual(h.guards, [], "a restart needs no guard");
+});
+
+test("the changed-on-disk check runs once per target, and only when a package move is due", async (t) => {
+	let checks = 0;
+	const { h, session } = reloadReady(t, { changedOnDisk: () => {
+		checks++;
+		return [];
+	} });
+	session.poll();
+	session.poll();
+	await session.apply(actions(h));
+	assert.deepEqual(h.calls, ["dispatch", "dispatch", "reload"]);
+	assert.equal(checks, 1);
+	const none = harness(t, (root) => set(root, "1.4.0", "0.30.0"), (root) => set(root, "1.4.0", "0.30.0"));
+	let idleChecks = 0;
+	const quiet = new UpdateSession({ ...none.host, changedOnDisk: () => {
+		idleChecks++;
+		return [];
+	} });
+	quiet.start("startup");
+	quiet.poll();
+	assert.equal(idleChecks, 0, "no move pending: no walk of the disk");
+});
+
+test("a changed-on-disk check that throws: logged, and the reload goes on under the guard", async (t) => {
+	const { h, session } = reloadReady(t, { changedOnDisk: () => {
+		throw new Error("EACCES");
+	} });
+	await session.apply(actions(h));
+	assert.deepEqual(h.calls, ["reload"]);
+	assert.ok(h.logs.some((line) => line.includes("could not check loaded packages for changes on disk: EACCES")));
+});
+
+test("a package update with a changed package but no launcher: a reload under the guard", async (t) => {
+	const { h, session } = reloadReady(t, { launchedByLauncher: false });
+	h.changed = ["/release/node_modules/remote-pi/dist/index.js"];
+	await session.apply(actions(h));
+	assert.deepEqual(h.calls, ["reload"]);
+	assert.equal(h.guards.length, 2);
 });

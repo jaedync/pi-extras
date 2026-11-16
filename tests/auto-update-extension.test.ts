@@ -8,7 +8,8 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import autoUpdate from "../extensions/auto-update.ts";
+import autoUpdate, { reloadFailureText } from "../extensions/auto-update.ts";
+import { processReloadGuard } from "../lib/auto-update/reload-guard.ts";
 import { markChildSession } from "../lib/child-session.ts";
 import { writeConfig } from "../lib/auto-update/config.ts";
 import { launcherEnv } from "../lib/auto-update/launcher-env.ts";
@@ -160,4 +161,36 @@ test("the launcher's variables leave process.env at load, so no child of Pi inhe
 	// A reload loads the module again with the variables gone: the values come from the process slot.
 	autoUpdate(fakePi().pi as never);
 	assert.deepEqual(launcherEnv(process.env), { token: "tok9", launchedByLauncher: true, restarted: { count: 2, target: "T1" } });
+});
+
+test("an error that the reload guard caught reaches the main session as a warning; a subagent's session does not take the notices over", (t) => {
+	const m = machine(t);
+	const guard = processReloadGuard();
+	// node:test fails a test on each unhandled rejection: its listeners stay off while this test emits fake ones.
+	const runner = process.listeners("unhandledRejection");
+	process.removeAllListeners("unhandledRejection");
+	t.after(() => {
+		guard.setReporter(undefined);
+		guard.disarm();
+		for (const listener of runner) process.on("unhandledRejection", listener);
+	});
+	// Caught during the reload, before the new module's session started.
+	guard.arm(60_000, () => {});
+	process.emit("unhandledRejection", new TypeError("(0 , _config.b) is not a function"), Promise.resolve());
+	const main = fakePi();
+	autoUpdate(main.pi as never);
+	main.emit("session_start", { reason: "reload" });
+	const warning = reloadFailureText("TypeError: (0 , _config.b) is not a function");
+	assert.deepEqual(main.notices, [[warning, "warning"]]);
+	assert.match(readFileSync(join(m.agentDir, "pi-extras.log"), "utf8"), /extension error after the update reload: TypeError/);
+	const child = fakePi({ child: true });
+	autoUpdate(child.pi as never);
+	child.emit("session_start", { reason: "startup" });
+	child.emit("session_shutdown", { reason: "quit" });
+	process.emit("unhandledRejection", new Error("later"), Promise.resolve());
+	assert.equal(main.notices.length, 2, "the main session still reports after a subagent's session ended");
+	assert.equal(child.notices.length, 0);
+	main.emit("session_shutdown", { reason: "reload" });
+	process.emit("unhandledRejection", new Error("after shutdown"), Promise.resolve());
+	assert.equal(main.notices.length, 2, "a stale context gets nothing");
 });
