@@ -2,6 +2,24 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.45.3 - 2026-11-16
+
+### Fixed
+
+- Auto-update: an update reload could end Pi. An extension whose files
+  changed on disk after Pi started got its new `index.js` but old modules
+  from Node's cache, and its async start failed with an unhandled rejection.
+  - From the start of an update reload until 2 minutes after its end,
+    auto-update catches unhandled rejections. It logs each one and shows a
+    warning. Pi keeps running.
+  - When a native module (`.js`, `.mjs`, `.cjs`) of a loaded package outside
+    the store changed after the process started, a package update restarts
+    Pi through the launcher, not a reload. The check reads file modification
+    times in the loaded packages and their `node_modules`, again just before
+    the move. `update.log` names the files.
+  - A synchronous throw from a timer or an event callback still ends Pi:
+    Pi's own handler acts first.
+
 ## 0.45.2 - 2026-11-16
 
 ### Fixed
