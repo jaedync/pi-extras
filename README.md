@@ -1037,7 +1037,10 @@ a window, because requests stop at the cap.
   of a model that the window governs since that reading was sampled. A
   rejection does not name its window (it can be a per-minute limit), so it
   does not bring back a block that a success disproved: only a newer reading
-  does. A shown block leaves later requests after such a success. A block that nothing fresh
+  does. A 429 whose `retry_after` is under 15 minutes is a burst limit, not a
+  quota window, and is no evidence of a block. A shown block stays in later
+  requests only on such fresh evidence, so it leaves the first request after a
+  granted reset while the proxy still serves the old sample. A block that nothing fresh
   confirms waits for the request itself: a real block rejects it, and the
   rejection shows the block warning at the end of that turn. A warning is
   shown and recorded at the end of its turn, and only when the newest reading
@@ -1045,7 +1048,9 @@ a window, because requests stop at the cap.
   true. Only an exact reading sampled no earlier than the one that fired a
   warning can drop it, and a successful response drops a block warning. When a window reads 50 points or more below the
   reading that fired a warning, in the same cycle, the window's warnings arm
-  again for the rest of the cycle, also in a resumed session.
+  again for the rest of the cycle, also in a resumed session. A key that an
+  older version recorded with no percent counts as its threshold (a block as
+  100%).
 - Proxy rejection flags can remain after a quota reset.
   A later reset cycle, a granted reset (a rejected window at 95% or more that
   then reads 50 points lower with the same reset), or a successful response

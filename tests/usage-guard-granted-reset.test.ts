@@ -27,6 +27,8 @@ export interface Harness {
 	store: LimitStore;
 	sent: Sent[];
 	entries: Array<{ type: string; customType: string; data: unknown }>;
+	/** Shown notices and session entries in the order they happened: "sent:<key>", "fired:<key>", "rearmed:<key>". */
+	log: string[];
 	ctx: { model: typeof MODEL; isIdle: () => boolean; sessionManager: { getEntries: () => unknown[] }; ui: { notify: () => void } };
 	on(name: string): (event: unknown, ctx: unknown) => Promise<unknown>;
 	/** One model request: returns the notices projected into it. */
@@ -47,10 +49,19 @@ export function harness(options: { refresher?: (store: LimitStore, now: number) 
 	const handlers = new Map<string, (event: unknown, ctx: unknown) => Promise<unknown>>();
 	const sent: Sent[] = [];
 	const entries: Harness["entries"] = [];
+	const log: string[] = [];
 	const pi = {
 		on: (name: string, handler: (event: unknown, ctx: unknown) => Promise<unknown>) => handlers.set(name, handler),
-		sendMessage: (message: Sent) => sent.push({ content: message.content, details: message.details }),
-		appendEntry: (customType: string, data: unknown) => entries.push({ type: "custom", customType, data }),
+		sendMessage: (message: Sent) => {
+			log.push(`sent:${message.details?.key}`);
+			sent.push({ content: message.content, details: message.details });
+		},
+		appendEntry: (customType: string, data: unknown) => {
+			const record = data as { fired?: string[]; rearmed?: string[] };
+			for (const key of record.fired ?? []) log.push(`fired:${key}`);
+			for (const key of record.rearmed ?? []) log.push(`rearmed:${key}`);
+			entries.push({ type: "custom", customType, data });
+		},
 		registerTool: () => undefined,
 		registerCommand: () => undefined,
 	};
@@ -58,7 +69,7 @@ export function harness(options: { refresher?: (store: LimitStore, now: number) 
 	const ctx = { model: MODEL, isIdle: () => false, sessionManager: { getEntries: () => entries }, ui: { notify: () => undefined } };
 	const on = (name: string) => handlers.get(name)!;
 	return {
-		clock, store, sent, entries, ctx, on,
+		clock, store, sent, entries, log, ctx, on,
 		async request() {
 			const result = await on("context")({ messages: [] }, ctx) as { messages: Array<{ content: string; details?: Sent["details"] }> };
 			return result.messages.map((message) => ({ content: message.content, details: message.details }));
@@ -360,6 +371,61 @@ test("review 2.3: a rejection waits for a turn end on its own family after a mod
 	assert.equal((h.sent as Sent[])[0]?.details?.reason, "exhausted", "the anthropic block is shown on its own family");
 });
 
+const BURST_ERROR = '{"error":{"type":"rate_limit_error","retry_after":20}}';
+
+function history(h: Harness): unknown[] {
+	return h.sent.map((sent) => ({ role: "custom", customType: "usage-guard", content: sent.content, details: sent.details }));
+}
+
+test("review 3.1: a burst 429 before any success does not make a pre-grant block fresh", async () => {
+	const h = harness();
+	await h.on("session_start")({}, h.ctx);
+	reading(h.store, 100, true, GRANT - 90_000);
+	h.clock.now = GRANT + 100_000;
+	assert.deepEqual(await h.request(), []);
+	await h.on("message_end")({ message: { role: "assistant", provider: "anthropic", model: MODEL.id, stopReason: "error", errorMessage: BURST_ERROR } }, h.ctx);
+	await h.on("turn_end")({ toolResults: [] }, h.ctx);
+	await h.on("agent_end")({ messages: [] }, h.ctx);
+	assert.deepEqual(h.sent, [], "no block is shown");
+	h.clock.now += 20_000;
+	assert.deepEqual(await h.request(), [], "the retry carries no block");
+	// A quota error with no retry time still counts for the window.
+	await h.on("message_end")({ message: { role: "assistant", provider: "anthropic", model: MODEL.id, stopReason: "error", errorMessage: '{"error":{"type":"rate_limit_error"}}' } }, h.ctx);
+	await h.on("agent_end")({ messages: [] }, h.ctx);
+	assert.equal((h.sent as Sent[])[0]?.details?.reason, "exhausted");
+});
+
+test("review 3.2: a fired key from an older version, with no percent, arms again after a granted reset", async () => {
+	const h = harness();
+	h.entries.push({ type: "custom", customType: "usage-guard", data: { fired: [`anthropic|seven_day|x|${RESET}`] } });
+	h.clock.now = GRANT + 3_600_000;
+	await h.on("session_start")({}, h.ctx);
+	reading(h.store, 0, false, h.clock.now);
+	await h.request();
+	await endTurn(h);
+	h.clock.now += 3_600_000;
+	reading(h.store, 96, false, h.clock.now);
+	assert.equal((await h.request())[0]?.details?.threshold, 95);
+});
+
+test("review 3.3: a block notice in history leaves the first request after a grant while the proxy serves the old sample", async () => {
+	const h = harness();
+	await h.on("session_start")({}, h.ctx);
+	h.clock.now = GRANT - 30_000;
+	reading(h.store, 100, true, h.clock.now - 5_000);
+	await h.request();
+	await rejectTurn(h);
+	assert.equal(h.sent.length, 1);
+	h.clock.now = GRANT + 100_000;
+	reading(h.store, 100, true, GRANT - 35_000, h.clock.now);
+	const result = await h.on("context")({ messages: history(h) }, h.ctx) as { messages: unknown[] };
+	assert.deepEqual(result.messages, [], "old evidence does not keep the block in the request");
+	// A new quota rejection is fresh evidence: the block is back in the next request.
+	await rejectTurn(h);
+	const again = await h.on("context")({ messages: history(h) }, h.ctx) as { messages: unknown[] };
+	assert.equal(again.messages.length, 1);
+});
+
 function random(seed: number): () => number {
 	let state = seed >>> 0;
 	return () => {
@@ -376,14 +442,20 @@ const FRESH_MS = 60_000;
 
 /**
  * Random orders of polls (some served from a proxy cache with an old sample),
- * granted resets, prompts, turn ends, successes, quota rejections and clock
- * steps. Usage only falls at a grant. Checks, for every order:
- * - a block notice enters a request only on evidence at most FRESH_MS old and newer than the last success;
- * - a shown notice matches the newest reading at the moment it is shown;
+ * granted resets, requests that carry the shown notices as history, turn ends,
+ * run ends with no turn end, successes, quota rejections, burst 429s, resumes
+ * and clock steps. Usage only falls at a grant. Checks, for every order:
+ * - a block enters a request, new or from history, only on a sample or a quota
+ *   rejection at most FRESH_MS old, and on a sample no older than the last success;
+ * - a shown notice matches the newest reading when it is shown, and a shown
+ *   block comes from a sample no older than the last success;
+ * - each shown key was recorded first, and no key is shown twice without a
+ *   re-arm between;
+ * - a quota rejection on a current block shows a wrap-up by its run end;
  * - after a grant, a reading at the top band, or a fresh block, warns again.
  */
 test("property: over random event orders, warnings follow the newest evidence and re-arm after each grant", async () => {
-	for (let seed = 1; seed <= 300; seed++) {
+	for (let seed = 1; seed <= 400; seed++) {
 		const rand = random(seed);
 		const pick = <T,>(items: readonly T[]): T => items[Math.floor(rand() * items.length)];
 		let truth = { pct: 0, rejected: false };
@@ -405,8 +477,25 @@ test("property: over random event orders, warnings follow the newest evidence an
 		reading(h.store, 0, false, GRANT);
 		const trace: string[] = [];
 		const where = () => `seed ${seed}: ${trace.join(", ")}`;
+		const persisted = new Set<string>();
+		const shownKeys = new Set<string>();
+		let logged = 0;
+		const checkLog = () => {
+			for (const item of h.log.slice(logged)) {
+				const [kind, key] = [item.slice(0, item.indexOf(":")), item.slice(item.indexOf(":") + 1)];
+				if (kind === "fired") persisted.add(key);
+				else if (kind === "rearmed") { persisted.delete(key); shownKeys.delete(key); }
+				else {
+					assert.ok(persisted.has(key), `a key shown before it was recorded: ${where()}`);
+					assert.ok(!shownKeys.has(key), `a key shown twice with no re-arm: ${where()}`);
+					shownKeys.add(key);
+				}
+			}
+			logged = h.log.length;
+		};
+		const blockEvidenced = () => h.clock.now - Math.max(lastSample, lastRejectAt) <= FRESH_MS && lastSample >= lastSuccessAt;
 		for (let step = 0; step < 40; step++) {
-			const event = pick(["poll", "poll", "cached", "grant", "request", "request", "turn", "success", "reject", "tick"] as const);
+			const event = pick(["poll", "poll", "cached", "grant", "request", "request", "turn", "success", "reject", "burst", "agentEnd", "resume", "tick"] as const);
 			trace.push(event);
 			if (event === "poll") {
 				const pct = Math.min(100, truth.pct + pick([0, 5, 20, 45]));
@@ -420,32 +509,43 @@ test("property: over random event orders, warnings follow the newest evidence an
 				lastSample = cached.sampledMs;
 			} else if (event === "grant") {
 				truth = { pct: 0, rejected: false };
+			} else if (event === "resume") {
+				// A new runtime restores fired keys from the session; it starts with no successes or rejections seen.
+				await h.on("session_shutdown")({}, h.ctx);
+				await h.on("session_start")({}, h.ctx);
+				lastRejectAt = -Infinity;
+				lastSuccessAt = -Infinity;
+				wrapUpQueued = false;
 			} else if (event === "request") {
 				seeDrop();
-				const notices = await h.request();
+				const shown = h.sent.map((sent) => ({ role: "custom", customType: "usage-guard", content: sent.content, details: sent.details, fromHistory: true }));
+				const result = await h.on("context")({ messages: shown }, h.ctx) as { messages: Array<Sent & { fromHistory?: boolean }> };
 				seeDrop();
 				const entry = h.store.get("anthropic")?.entries[0];
-				const evidence = Math.max(lastSample, lastRejectAt);
-				for (const notice of notices) {
-					const details = notice.details as { final?: boolean; reason?: string; threshold?: number };
-					if (details.reason === "exhausted") assert.ok(h.clock.now - evidence <= FRESH_MS && lastSample >= lastSuccessAt, `block notice on old or disproved evidence: ${where()}`);
-					if (details.final) wrapUpQueued = true;
+				const notices = result.messages.filter((message) => !message.fromHistory);
+				for (const message of result.messages) {
+					if (message.details?.reason === "exhausted") assert.ok(blockEvidenced(), `a block in a request on old or disproved evidence: ${where()}`);
 				}
-				// A success after the evidence disproves a block.
-				// A rejection does not name its window: only a newer reading brings a disproved block back.
-				const fresh = h.clock.now - evidence <= FRESH_MS && lastSample >= lastSuccessAt;
+				for (const notice of notices) if ((notice.details as { final?: boolean }).final) wrapUpQueued = true;
 				// A block is due only on fresh evidence; a top band on any reading.
-				const due = entry !== undefined && !entry.approximate && (entry.exhausted === true ? fresh : (entry.usedPct ?? 0) >= 95);
+				const due = entry !== undefined && !entry.approximate && (entry.exhausted === true ? blockEvidenced() : (entry.usedPct ?? 0) >= 95);
 				if (due && wrapUpShown === undefined && !wrapUpQueued) {
 					assert.ok(notices.some((notice) => (notice.details as { final?: boolean }).final), `a due wrap-up did not fire: ${where()}`);
 				}
-			} else if (event === "turn" || event === "success" || event === "reject") {
+			} else if (event === "turn" || event === "success" || event === "reject" || event === "burst" || event === "agentEnd") {
 				const before = h.sent.length;
-				const stopReason = event === "reject" ? "error" : "toolUse";
-				if (event === "reject") lastRejectAt = h.clock.now;
-				else lastSuccessAt = h.clock.now;
-				await h.on("message_end")({ message: { role: "assistant", provider: "anthropic", model: MODEL.id, stopReason, ...(event === "reject" ? { errorMessage: RATE_LIMIT } : {}) } }, h.ctx);
-				await h.on("turn_end")({ toolResults: [] }, h.ctx);
+				seeDrop();
+				const capped = wrapUpShown !== undefined;
+				if (event !== "agentEnd") {
+					const failed = event === "reject" || event === "burst";
+					if (event === "reject") lastRejectAt = h.clock.now;
+					if (!failed) lastSuccessAt = h.clock.now;
+					const errorMessage = event === "reject" ? RATE_LIMIT : event === "burst" ? BURST_ERROR : undefined;
+					await h.on("message_end")({ message: { role: "assistant", provider: "anthropic", model: MODEL.id, stopReason: failed ? "error" : "toolUse", ...(errorMessage ? { errorMessage } : {}) } }, h.ctx);
+				}
+				// A failed request can end the run with no turn end.
+				if (event === "turn" || event === "success" || rand() < 0.5) await h.on("turn_end")({ toolResults: [] }, h.ctx);
+				await h.on("agent_end")({ messages: [] }, h.ctx);
 				const entry = h.store.get("anthropic")?.entries[0];
 				for (const shown of h.sent.slice(before)) {
 					const details = shown.details as { final?: boolean; reason?: string; threshold?: number };
@@ -456,11 +556,15 @@ test("property: over random event orders, warnings follow the newest evidence an
 					else assert.ok((entry?.usedPct ?? 0) >= (details.threshold ?? 0), `a band shown below its threshold: ${where()}`);
 					if (details.final) wrapUpShown = (shown.details as { pct?: number }).pct ?? 100;
 				}
+				if (event === "reject" && entry?.exhausted === true && !entry.approximate && lastSample >= lastSuccessAt && !capped) {
+					assert.ok(h.sent.slice(before).some((shown) => (shown.details as { final?: boolean }).final), `a quota rejection on a current block showed no wrap-up: ${where()}`);
+				}
 				wrapUpQueued = false;
 				seeDrop();
 			} else {
 				h.clock.now += pick([5_000, 30_000, 90_000, 300_000]);
 			}
+			checkLog();
 		}
 	}
 });

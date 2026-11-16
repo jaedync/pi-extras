@@ -161,6 +161,21 @@ interface Queued {
 	sampledMs: number;
 }
 
+/**
+ * A 429 with a retry time shorter than this is a burst limit (requests or
+ * tokens per minute), not a quota window: it is no evidence of a block.
+ */
+const BURST_RETRY_SECONDS = 15 * 60;
+
+/** The percent a fired key stands for when its entry has none (older versions): a block is 100, a band its threshold. */
+function keyPct(key: string): number | undefined {
+	const parts = key.split("|");
+	const threshold = parts.at(-2) ?? "";
+	if (threshold === "x") return 100;
+	const pct = Number(threshold.replace(/^b/, ""));
+	return threshold !== "" && Number.isFinite(pct) ? pct : undefined;
+}
+
 export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions = {}): void {
 	const store = options.store ?? sharedLimitStore();
 	const configFile = options.configFile ?? CONFIG_FILE;
@@ -205,7 +220,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 			const data = (entry as { data?: GuardEntry }).data;
 			for (const key of data?.fired ?? []) {
 				fired.add(key);
-				firedPct.set(key, typeof data?.pct === "number" ? data.pct : undefined);
+				firedPct.set(key, typeof data?.pct === "number" ? data.pct : keyPct(key));
 			}
 			for (const key of data?.rearmed ?? []) {
 				fired.delete(key);
@@ -243,11 +258,23 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		return fresh(warning) && !succeededAfter(warning.provider, warning.entry.modelFamily, sampledAt(warning));
 	}
 
-	/** A shown block notice whose reading a later success disproved. Older notices carry no sample time. */
-	function disprovedBlock(details: unknown): boolean {
-		const record = details as { reason?: unknown; provider?: unknown; modelFamily?: unknown; sampledMs?: unknown } | undefined;
-		if (record?.reason !== "exhausted" || typeof record.provider !== "string" || typeof record.sampledMs !== "number") return false;
-		return succeededAfter(record.provider, typeof record.modelFamily === "string" ? record.modelFamily : undefined, record.sampledMs);
+	/**
+	 * A block notice in history stays in requests only on fresh evidence that a
+	 * success has not disproved: a granted reset keeps the reset time, so the
+	 * proxy's old sample alone does not show that it is gone.
+	 */
+	function staleBlock(details: unknown): boolean {
+		const record = details as { reason?: unknown; provider?: unknown; key?: unknown; modelFamily?: unknown; sampledMs?: unknown } | undefined;
+		if (record?.reason !== "exhausted" || typeof record.provider !== "string" || typeof record.key !== "string") return false;
+		const modelFamily = typeof record.modelFamily === "string" ? record.modelFamily : undefined;
+		if (typeof record.sampledMs === "number" && succeededAfter(record.provider, modelFamily, record.sampledMs)) return true;
+		const snapshot = store.get(record.provider);
+		const window = record.key.split("|").slice(1, -2).join("|");
+		const entry = snapshot?.entries.find((candidate) => (candidate.key ?? candidate.label) === window);
+		if (!entry) return false;
+		const sampled = entry.sampledMs ?? snapshot?.atMs ?? -Infinity;
+		if (succeededAfter(record.provider, modelFamily, sampled)) return true;
+		return now() - Math.max(sampled, rejectedAt.get(record.provider) ?? -Infinity) > FRESH_EVIDENCE_MS;
 	}
 
 	function fresh(warning: Warning): boolean {
@@ -551,11 +578,14 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		if (["stop", "toolUse"].includes(message.stopReason)) {
 			store.recordSuccess(family, message.model, now());
 			succeededAt.set(family, new Map(succeededAt.get(family)).set(message.model, now()));
-		} else if (message.stopReason === "error" && parseRateLimit(message.errorMessage)) {
-			rejectedAt.set(family, now());
-			rejectedInRun.add(family);
-			store.recordRejection(limitKey(message.provider), message.model, now());
+			return;
 		}
+		const limit = message.stopReason === "error" ? parseRateLimit(message.errorMessage) : undefined;
+		// A burst limit does not name a quota window, so it is no evidence that one is blocked.
+		if (!limit || (limit.retryAfterSeconds !== undefined && limit.retryAfterSeconds < BURST_RETRY_SECONDS)) return;
+		rejectedAt.set(family, now());
+		rejectedInRun.add(family);
+		store.recordRejection(family, message.model, now());
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {
@@ -585,7 +615,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		const model = activeModel(ctx);
 		return {
 			messages: [...event.messages.filter((message) => message.role !== "custom" ||
-				message.customType !== GUARD_CUSTOM_TYPE || !disprovedBlock(message.details) && warningApplies(message.details, model, now(), (model.provider ? store.get(limitKey(model.provider)) : undefined), budget ?? null)), ...notices],
+				message.customType !== GUARD_CUSTOM_TYPE || !staleBlock(message.details) && warningApplies(message.details, model, now(), (model.provider ? store.get(limitKey(model.provider)) : undefined), budget ?? null)), ...notices],
 		};
 	});
 
