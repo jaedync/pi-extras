@@ -1033,10 +1033,14 @@ a window, because requests stop at the cap.
   sampled more than 60 s ago enters a request, Usage Guard asks for one
   forced poll (at most once a minute per provider, within the 2 s poll
   budget). A provider block also needs that fresh evidence: a reading sampled,
-  or a quota rejection seen, at most 60 s before. A block that nothing fresh
-  confirms waits for the request itself, which a real block rejects. A warning is shown and recorded at the end of its turn, and only
-  when the newest reading still supports it; otherwise it is dropped and can
-  fire again when it is true. When a window reads 50 points or more below the
+  or a quota rejection seen, at most 60 s before, and no successful response
+  of a model that the window governs since then. A block that nothing fresh
+  confirms waits for the request itself: a real block rejects it, and the
+  rejection shows the block warning at the end of that turn. A warning is
+  shown and recorded at the end of its turn, and only when the newest reading
+  still supports it; otherwise it is dropped and can fire again when it is
+  true. Only an exact reading sampled no earlier than the one that fired a
+  warning can drop it, and a successful response drops a block warning. When a window reads 50 points or more below the
   reading that fired a warning, in the same cycle, the window's warnings arm
   again for the rest of the cycle, also in a resumed session.
 - Proxy rejection flags can remain after a quota reset.

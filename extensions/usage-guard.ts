@@ -21,6 +21,7 @@ import { routedModel } from "../lib/routed-model.ts";
 import { createDollarsCollector, type DollarsCollector } from "../lib/usage-dollars/collect.ts";
 import {
 	FRESH_EVIDENCE_MS,
+	entryApplies,
 	hotProviders,
 	isUnmetered,
 	normalizeGuardConfig,
@@ -154,6 +155,13 @@ export interface UsageGuardOptions {
  */
 const POLL_BUDGET_MS = 2_000;
 
+/** A notice in a request, with the sample time of its reading and of its newest evidence. */
+interface Queued {
+	notice: CustomMessage;
+	sampledMs: number;
+	evidenceMs: number;
+}
+
 export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions = {}): void {
 	const store = options.store ?? sharedLimitStore();
 	const configFile = options.configFile ?? CONFIG_FILE;
@@ -170,9 +178,13 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	 * Notices already in a request but not yet shown or recorded. The turn end
 	 * shows each one that the newest reading still supports and drops the rest.
 	 */
-	let queued: CustomMessage[] = [];
+	let queued: Queued[] = [];
 	/** By limit family: when this session last got a quota rejection, the freshest evidence of a block. */
 	const rejectedAt = new Map<string, number>();
+	/** By limit family, then model id: when a response last succeeded, which disproves an older block. */
+	const succeededAt = new Map<string, Map<string, number>>();
+	/** Limit families with a quota rejection that no turn end has handled yet. */
+	const rejectedInRun = new Set<string>();
 	/** By limit family: when a stale final warning last asked for a forced poll. */
 	const confirmAskedAt = new Map<string, number>();
 	let budget: SessionBudget | undefined;
@@ -210,9 +222,21 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		return Math.max(sampled, rejectedAt.get(warning.provider) ?? -Infinity);
 	}
 
-	/** Old evidence of a block waits for the request: a real block rejects it, which is fresh evidence. */
+	/** True when a model that the window governs got a response after `since`. */
+	function succeededAfter(provider: string, modelFamily: string | undefined, since: number): boolean {
+		for (const [id, at] of succeededAt.get(provider) ?? []) {
+			if (at > since && entryApplies({ label: "", modelFamily }, { provider, id })) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Old evidence of a block waits for the request: a real block rejects it,
+	 * which is fresh evidence. A success after the evidence disproves it.
+	 */
 	function supported(warning: Warning): boolean {
-		return warning.reason !== "exhausted" || fresh(warning);
+		if (warning.reason !== "exhausted") return true;
+		return fresh(warning) && !succeededAfter(warning.provider, warning.entry.modelFamily, evidenceAt(warning));
 	}
 
 	function fresh(warning: Warning): boolean {
@@ -237,13 +261,16 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	 */
 	function flush(ctx: ExtensionContext): void {
 		if (!queued.length) return;
-		const notices = queued;
+		const items = queued;
 		queued = [];
 		const model = activeModel(ctx);
 		const snapshot = model.provider ? store.get(limitKey(model.provider)) : undefined;
-		for (const notice of notices) {
-			const details = notice.details as { key: string; pct?: number };
-			if (!warningApplies(notice.details, model, now(), snapshot, budget ?? null)) {
+		for (const { notice, sampledMs, evidenceMs } of items) {
+			const details = notice.details as { key: string; pct?: number; provider: string; modelFamily?: string; reason: string };
+			// Only a reading at least as new as the one that fired the notice, and not approximate, can disprove it.
+			const newer = snapshot && { ...snapshot, entries: snapshot.entries.filter((entry) => !entry.approximate && (entry.sampledMs ?? snapshot.atMs) >= sampledMs) };
+			const disproved = details.reason === "exhausted" && succeededAfter(details.provider, details.modelFamily, evidenceMs);
+			if (disproved || !warningApplies(notice.details, model, now(), newer, budget ?? null)) {
 				fired.delete(details.key);
 				firedPct.delete(details.key);
 				continue;
@@ -339,7 +366,18 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		return [...unknown].map(([key, provider]) => [key, store.refresh(provider, false)]);
 	}
 
-	function evaluate(ctx: ExtensionContext, deliverWarnings = false): CustomMessage[] {
+	/**
+	 * After a quota rejection, show the block warnings it is fresh evidence for:
+	 * the request that met the block may have been built on an older reading.
+	 */
+	function showRejected(ctx: ExtensionContext): void {
+		if (!rejectedInRun.size) return;
+		rejectedInRun.clear();
+		evaluate(ctx, true, (warning) => warning.reason === "exhausted");
+		flush(ctx);
+	}
+
+	function evaluate(ctx: ExtensionContext, deliverWarnings = false, only: (warning: Warning) => boolean = () => true): CustomMessage[] {
 		try {
 			const snapshots = store.entries();
 			const model = activeModel(ctx);
@@ -347,8 +385,9 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 			const hot = hotProviders(snapshots, model, config, budget, now());
 			for (const [provider] of snapshots) store.setHot(provider, hot.has(provider));
 			if (!deliverWarnings) return [];
-			return pendingWarnings(snapshots, model, config, budget, fired, now()).filter(supported).map((warning) => {
-				const pct = warning.entry.approximate ? undefined : warning.entry.usedPct;
+			return pendingWarnings(snapshots, model, config, budget, fired, now()).filter((warning) => only(warning) && supported(warning)).map((warning) => {
+				// A block counts as 100% when its reading has no exact percent, so a granted reset can re-arm it.
+				const pct = warning.entry.approximate ? (warning.reason === "exhausted" ? warning.entry.usedPct ?? 100 : undefined) : warning.entry.usedPct;
 				const notice: CustomMessage = {
 					role: "custom", customType: GUARD_CUSTOM_TYPE, display: true, timestamp: now(),
 					content: warningMessage(warning, config, now()),
@@ -362,7 +401,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 				firedPct.set(warning.key, pct);
 				// The returned projection reaches this request now. The turn end shows and
 				// records it, if a newer reading has not disproved it by then (flush).
-				queued.push(notice);
+				const sampledMs = warning.entry.sampledMs ?? store.get(warning.provider)?.atMs ?? -Infinity;
+				queued.push({ notice, sampledMs, evidenceMs: evidenceAt(warning) });
 				return notice;
 			});
 		} catch (error) {
@@ -475,6 +515,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	pi.on("session_start", async (_event, ctx) => {
 		closed = false;
 		rejectedAt.clear();
+		succeededAt.clear();
+		rejectedInRun.clear();
 		confirmAskedAt.clear();
 		latestCtx = ctx;
 		config = loadGuardConfig(configFile);
@@ -492,9 +534,13 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	pi.on("message_end", async (event) => {
 		const message = event.message;
 		if (message.role !== "assistant") return;
-		if (["stop", "toolUse"].includes(message.stopReason)) store.recordSuccess(limitKey(message.provider), message.model, now());
-		else if (message.stopReason === "error" && parseRateLimit(message.errorMessage)) {
-			rejectedAt.set(limitKey(message.provider), now());
+		const family = limitKey(message.provider);
+		if (["stop", "toolUse"].includes(message.stopReason)) {
+			store.recordSuccess(family, message.model, now());
+			succeededAt.set(family, new Map(succeededAt.get(family)).set(message.model, now()));
+		} else if (message.stopReason === "error" && parseRateLimit(message.errorMessage)) {
+			rejectedAt.set(family, now());
+			rejectedInRun.add(family);
 			store.recordRejection(limitKey(message.provider), message.model, now());
 		}
 	});
@@ -503,6 +549,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		if (closed) return;
 		latestCtx = ctx;
 		flush(ctx);
+		showRejected(ctx);
 		evaluate(ctx);
 	});
 
@@ -511,6 +558,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		if (closed) return;
 		latestCtx = ctx;
 		flush(ctx);
+		showRejected(ctx);
 	});
 
 	// Prompts, automatic job wakes and queued follow-ups all share this request

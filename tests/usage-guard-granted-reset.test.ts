@@ -133,7 +133,7 @@ test("a fresh block still warns, and a quota rejection is fresh evidence for an 
 	assert.deepEqual(await rejected.request(), []);
 	await rejected.on("message_end")({ message: { role: "assistant", provider: "anthropic", model: MODEL.id, stopReason: "error", errorMessage: '{"error":{"type":"rate_limit_error","retry_after":7200}}' } }, rejected.ctx);
 	await rejected.on("turn_end")({ toolResults: [] }, rejected.ctx);
-	assert.equal((await rejected.request())[0]?.details?.reason, "exhausted");
+	assert.equal(rejected.sent[0]?.details?.reason, "exhausted", "the rejection shows the block at the turn end");
 });
 
 test("a notice that a newer reading disproves before the turn ends is not shown, and can fire again later", async () => {
@@ -231,6 +231,86 @@ test("a proxy that keeps its last rejection after a granted reset does not keep 
 	assert.deepEqual(await h.request(), []);
 });
 
+/** The same reading, as a Claude Code (SDK) reading that the guard treats as approximate. */
+function approximateReading(store: LimitStore, pct: number, rejected: boolean, sampledMs: number): void {
+	reading(store, pct, rejected, sampledMs);
+	const snapshot = store.get("anthropic")!;
+	store.set("anthropic", { ...snapshot, entries: snapshot.entries.map((entry) => ({ ...entry, approximate: true })) });
+}
+
+const QUOTA_ERROR = '{"error":{"type":"rate_limit_error","retry_after":7200}}';
+
+async function rejectTurn(h: Harness, withTurnEnd = true): Promise<void> {
+	await h.on("message_end")({ message: { role: "assistant", provider: "anthropic", model: MODEL.id, stopReason: "error", errorMessage: QUOTA_ERROR } }, h.ctx);
+	if (withTurnEnd) await h.on("turn_end")({ toolResults: [] }, h.ctx);
+	await h.on("agent_end")({ messages: [] }, h.ctx);
+}
+
+test("review 1: a request that succeeds disproves a block notice from a reading sampled just before the grant", async () => {
+	const h = harness();
+	await h.on("session_start")({}, h.ctx);
+	reading(h.store, 100, true, GRANT - 10_000);
+	h.clock.now = GRANT + 30_000;
+	assert.equal((await h.request())[0]?.details?.reason, "exhausted", "the reading is fresh, so the notice enters the request");
+	await endTurn(h);
+	assert.deepEqual(h.sent, [], "the success came after the reading: the block notice is not shown");
+	h.clock.now += 10_000;
+	assert.deepEqual(await h.request(), [], "nor does it enter the next request from the same reading");
+	await endTurn(h);
+	assert.deepEqual(h.sent, []);
+	// A newer rejection is evidence again.
+	h.clock.now += 10_000;
+	await rejectTurn(h);
+	assert.equal((h.sent as Sent[]).at(-1)?.details?.reason, "exhausted");
+});
+
+test("review 2: a block that fired from an approximate reading arms again after a granted reset", async () => {
+	const h = harness();
+	await h.on("session_start")({}, h.ctx);
+	approximateReading(h.store, 100, true, GRANT - 30_000);
+	h.clock.now = GRANT - 20_000;
+	assert.equal((await h.request())[0]?.details?.reason, "exhausted");
+	await rejectTurn(h);
+	assert.equal(h.sent.length, 1);
+	h.clock.now = GRANT + 60_000;
+	reading(h.store, 0, false, h.clock.now);
+	await h.on("turn_end")({ toolResults: [] }, h.ctx);
+	h.clock.now += 3_600_000;
+	reading(h.store, 96, false, h.clock.now);
+	assert.equal((await h.request())[0]?.details?.threshold, 95, "a real 95% later in the cycle warns");
+});
+
+test("review 3: a real block from an old reading is shown when the request is rejected, also with no turn end", async () => {
+	for (const withTurnEnd of [true, false]) {
+		const h = harness();
+		await h.on("session_start")({}, h.ctx);
+		reading(h.store, 100, true, GRANT - 180_000);
+		h.clock.now = GRANT;
+		assert.deepEqual(await h.request(), [], "old evidence waits for the request");
+		await rejectTurn(h, withTurnEnd);
+		assert.equal(h.sent.length, 1, `the rejection shows the block (turn end: ${withTurnEnd})`);
+		assert.equal(h.sent[0].details?.reason, "exhausted");
+		assert.ok(h.entries.some((entry) => (entry.data as { fired?: string[] }).fired?.some((key) => key.endsWith(`|x|${RESET}`))), "and records its key");
+		h.clock.now += 300_000;
+		assert.deepEqual(await h.request(), [], "the next request does not repeat it");
+	}
+});
+
+test("review 4: a band notice is not dropped by a reading older than the one that fired it, or by an approximate one", async () => {
+	for (const lower of ["older", "approximate"] as const) {
+		const h = harness();
+		await h.on("session_start")({}, h.ctx);
+		h.clock.now = GRANT + 3_600_000;
+		reading(h.store, 96, false, h.clock.now - 120_000);
+		assert.equal((await h.request())[0]?.details?.threshold, 95);
+		if (lower === "older") reading(h.store, 90, false, h.clock.now - 400_000, h.clock.now);
+		else approximateReading(h.store, 90, false, h.clock.now);
+		await endTurn(h);
+		assert.equal(h.sent.length, 1, `the notice the model saw is shown (${lower} reading)`);
+		assert.deepEqual(await h.request(), [], "and does not enter the next request again");
+	}
+});
+
 function random(seed: number): () => number {
 	let state = seed >>> 0;
 	return () => {
@@ -249,7 +329,7 @@ const FRESH_MS = 60_000;
  * Random orders of polls (some served from a proxy cache with an old sample),
  * granted resets, prompts, turn ends, successes, quota rejections and clock
  * steps. Usage only falls at a grant. Checks, for every order:
- * - a block notice enters a request only on evidence at most FRESH_MS old;
+ * - a block notice enters a request only on evidence at most FRESH_MS old and newer than the last success;
  * - a shown notice matches the newest reading at the moment it is shown;
  * - after a grant, a reading at the top band, or a fresh block, warns again.
  */
@@ -261,6 +341,7 @@ test("property: over random event orders, warnings follow the newest evidence an
 		let lastSample = GRANT;
 		let cached = { pct: 0, rejected: false, sampledMs: GRANT };
 		let lastRejectAt = -Infinity;
+		let lastSuccessAt = -Infinity;
 		// The percent of the shown wrap-up: the guard re-arms when it sees a reading 50 points lower.
 		let wrapUpShown: number | undefined;
 		let wrapUpQueued = false;
@@ -298,10 +379,11 @@ test("property: over random event orders, warnings follow the newest evidence an
 				const evidence = Math.max(lastSample, lastRejectAt);
 				for (const notice of notices) {
 					const details = notice.details as { final?: boolean; reason?: string; threshold?: number };
-					if (details.reason === "exhausted") assert.ok(h.clock.now - evidence <= FRESH_MS, `block notice on old evidence: ${where()}`);
+					if (details.reason === "exhausted") assert.ok(h.clock.now - evidence <= FRESH_MS && evidence >= lastSuccessAt, `block notice on old or disproved evidence: ${where()}`);
 					if (details.final) wrapUpQueued = true;
 				}
-				const fresh = h.clock.now - evidence <= FRESH_MS;
+				// A success after the evidence disproves a block.
+				const fresh = h.clock.now - evidence <= FRESH_MS && evidence >= lastSuccessAt;
 				// A block is due only on fresh evidence; a top band on any reading.
 				const due = entry !== undefined && !entry.approximate && (entry.exhausted === true ? fresh : (entry.usedPct ?? 0) >= 95);
 				if (due && wrapUpShown === undefined && !wrapUpQueued) {
@@ -311,6 +393,7 @@ test("property: over random event orders, warnings follow the newest evidence an
 				const before = h.sent.length;
 				const stopReason = event === "reject" ? "error" : "toolUse";
 				if (event === "reject") lastRejectAt = h.clock.now;
+				else lastSuccessAt = h.clock.now;
 				await h.on("message_end")({ message: { role: "assistant", provider: "anthropic", model: MODEL.id, stopReason, ...(event === "reject" ? { errorMessage: RATE_LIMIT } : {}) } }, h.ctx);
 				await h.on("turn_end")({ toolResults: [] }, h.ctx);
 				const entry = h.store.get("anthropic")?.entries[0];
