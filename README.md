@@ -1042,8 +1042,13 @@ a window, because requests stop at the cap.
     supports show then. A proxy samples the window that rejected the request.
   - A proxy can keep a window's last "rejected" status under a newer, lower
     percent (Meridian does after a granted reset). A block below 95% therefore
-    also needs a quota rejection in the last 60 s, and no other window of the
-    provider blocked at 95% or more, which would explain that rejection.
+    also needs a quota rejection in the last 60 s whose `retry_after` names
+    the window: it ends within 10 minutes of the window's reset, or it is
+    Meridian's 24 h cap and the window resets a day or more away. A rejection
+    with no `retry_after` names no window.
+  - A rejection is recorded on every window of the provider, so the record
+    keeps the highest percent of the cycle: a granted reset stays cleared
+    after a later rejection of another window.
   - A 429 whose `retry_after` is under 15 minutes is a burst limit, not a
     quota window, and is not counted as a quota rejection.
   - A shown block stays in later requests only while that evidence holds.

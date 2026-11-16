@@ -89,8 +89,9 @@ test("only successful assistant responses clear stale proxy blocks and remove th
 	const { pi, store, ctx, clock } = setup();
 	const entries = parseProxyQuota({ buckets: [{ type: "five_hour", utilization: 0.03, resetsAt: RESET, status: "rejected" }] });
 	store.set("anthropic", { entries, atMs: NOW - 1000, source: "poll" });
-	// A kept "rejected" status at a low percent needs a quota rejection to count as a block.
-	await pi.handlers.get("message_end")!({ message: { role: "assistant", provider: "anthropic", model: ctx.model.id, stopReason: "error", errorMessage: '{"error":{"type":"rate_limit_error","retry_after":7200}}' } }, ctx);
+	// A kept "rejected" status at a low percent needs a quota rejection whose retry time names the window.
+	const retryAfter = Math.round((RESET - NOW) / 1000);
+	await pi.handlers.get("message_end")!({ message: { role: "assistant", provider: "anthropic", model: ctx.model.id, stopReason: "error", errorMessage: `{"error":{"type":"rate_limit_error","retry_after":${retryAfter}}}` } }, ctx);
 	const blocked = await request(pi, ctx);
 	assert.match(blocked.messages[0].content, /blocked by the provider/);
 	// A success at the same instant as the rejection does not clear it.

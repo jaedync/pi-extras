@@ -18,6 +18,17 @@ function knownPct(entry: LimitEntry): number | undefined {
 }
 
 /**
+ * A rejection names no window, so it is recorded on each one. Keep the
+ * highest percent of the cycle: a granted reset then stays a granted reset.
+ */
+function cyclePct(prior: Rejection, entry: LimitEntry): number | undefined {
+	const pct = knownPct(entry);
+	const sameCycle = prior.resetMs !== undefined && entry.resetMs !== undefined && Math.abs(entry.resetMs - prior.resetMs) <= RESET_DRIFT_MS;
+	if (!sameCycle || prior.pct === undefined) return pct;
+	return pct === undefined ? prior.pct : Math.max(prior.pct, pct);
+}
+
+/**
  * A granted reset keeps the reset time and empties the window, while a proxy
  * can still repeat its last rejection: a near-full rejection that reads far
  * lower in the same cycle is no longer evidence of a block.
@@ -43,7 +54,7 @@ export function createRejectionTracker() {
 			// An actual quota error is newer than a prior success, even if the quota poll is cached.
 			rejections.set(key, accepted
 				? { ...prior, evidenceAtMs: atMs, cleared: true }
-				: { evidenceAtMs: atMs, resetMs: entry.resetMs, pct: knownPct(entry), cleared: false });
+				: { evidenceAtMs: atMs, resetMs: entry.resetMs, pct: cyclePct(prior, entry), cleared: false });
 		}
 	}
 	return {
