@@ -10,7 +10,7 @@
  */
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { getAgentDir, getMarkdownTheme, getPackageDir, keyHint, VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isChildSession } from "../lib/child-session.ts";
 import { processBusy } from "../lib/idle-gc.ts";
@@ -23,6 +23,8 @@ import { parseChangelog, type NotesEntry } from "../lib/release-notes.ts";
 import { launcherEnv } from "../lib/auto-update/launcher-env.ts";
 import { fileLog } from "../lib/auto-update/log.ts";
 import { changedInPlace } from "../lib/auto-update/in-place.ts";
+import { readSettingsPackages, settingsFile } from "../lib/auto-update/settings.ts";
+import { classify, entrySource } from "../lib/auto-update/sources.ts";
 import { EXTRAS_DIR, isInside, storePaths, storeRootFrom } from "../lib/auto-update/paths.ts";
 import { processReloadGuard, RELOAD_GUARD_MS } from "../lib/auto-update/reload-guard.ts";
 import { APPLY_COMMAND, STATUS_KEY, UPDATE_ENTRY, UpdateSession, type UpdateEntryData } from "../lib/auto-update/session.ts";
@@ -52,6 +54,23 @@ function loadedPaths(pi: ExtensionAPI): string[] {
 }
 
 const FOCUS_WIDGET = "pi-extras-auto-update-focus";
+
+/**
+ * What the in-place check walks: the code this process loaded outside the
+ * store, and the local path packages of settings.json (an extension with only
+ * event handlers registers no tool or command, so loadedPaths misses it).
+ */
+function outsideStore(loaded: readonly string[], agentDir: string, storeRoot: string): string[] {
+	let entries: unknown[] = [];
+	try {
+		entries = readSettingsPackages(settingsFile(agentDir));
+	} catch (error) {
+		// Pi loaded no packages from a broken settings.json either; the loaded paths still count.
+		void error;
+	}
+	const local = entries.map(entrySource).filter((source): source is string => source !== undefined && classify(source, storeRoot).kind === "local").map((source) => realOr(resolve(agentDir, source)));
+	return [...loaded, ...local].filter((path) => !isInside(path, storeRoot));
+}
 
 /** The notice for an error that the reload guard caught (lib/auto-update/reload-guard.ts). */
 export function reloadFailureText(error: string): string {
@@ -220,7 +239,9 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 				log,
 				exit: (code) => process.exit(code),
 				// performance.timeOrigin is the start of this process: Node's module cache is as old as that.
-				changedOnDisk: () => changedInPlace(loadedPaths(pi).filter((path) => !isInside(path, paths.root)), performance.timeOrigin),
+				changedOnDisk: () => changedInPlace(outsideStore(loadedPaths(pi), agentDir, paths.root), performance.timeOrigin, {
+					onLimit: (entries) => log(`the check for packages changed on disk stopped after ${entries} entries`),
+				}),
 				armReloadGuard: () => processReloadGuard().arm(RELOAD_GUARD_MS, log),
 			});
 			session.start(event.reason);

@@ -178,11 +178,15 @@ newest versions, run `pi update --all`.
   rejection, Node usually stops the process. From the start of an update reload until
   2 minutes after its end, auto-update catches these errors. It writes them to
   `update.log` and `pi-extras.log`, and shows a warning. Pi keeps running.
-  Restart Pi if a tool or command of that extension does not work.
+  Restart Pi if a tool or command of that extension does not work. A
+  synchronous throw from a timer or an event callback is different: Pi's
+  own handler ends the process, and the guard cannot stop that.
 - Node keeps `.js`, `.mjs` and `.cjs` modules in its cache by file path, so a
   reload does not read them again. If a file of a loaded package outside
   the store changed on disk after Pi started, a package update restarts Pi
-  through the launcher, not a reload. `update.log` names the changed files.
+  through the launcher, not a reload. The check reads the modification time
+  of the files in each loaded package and in its `node_modules`.
+  `update.log` names the changed files.
   Without the launcher, or in RPC mode, the session reloads under the guard
   above. To change a local package without this risk, install it to a new
   folder and move a symlink to it.

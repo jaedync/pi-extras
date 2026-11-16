@@ -331,6 +331,8 @@ export class UpdateSession {
 	/** The apply command: checks again, then reloads or restarts. Runs as a command, where `reload` is safe. */
 	async apply(actions: { readonly reload: () => Promise<void>; readonly shutdown: () => void }): Promise<void> {
 		const state = safeState(this.host.paths);
+		// A package can change on disk while the move waits for idle: check again before acting.
+		this.onDisk = undefined;
 		const decision = this.decision(state);
 		if ((decision.kind !== "reload" && decision.kind !== "restart") || !this.idle(decision.kind) || !state?.current) return;
 		const after = `Updated ${decision.change}`;

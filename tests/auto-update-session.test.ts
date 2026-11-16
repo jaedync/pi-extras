@@ -785,7 +785,7 @@ test("a package update when a loaded package changed on disk: a restart through 
 	assert.deepEqual(h.guards, [], "a restart needs no guard");
 });
 
-test("the changed-on-disk check runs once per target, and only when a package move is due", async (t) => {
+test("the changed-on-disk check runs once per target while polls wait, once more at apply, and only when a package move is due", async (t) => {
 	let checks = 0;
 	const { h, session } = reloadReady(t, { changedOnDisk: () => {
 		checks++;
@@ -795,7 +795,7 @@ test("the changed-on-disk check runs once per target, and only when a package mo
 	session.poll();
 	await session.apply(actions(h));
 	assert.deepEqual(h.calls, ["dispatch", "dispatch", "reload"]);
-	assert.equal(checks, 1);
+	assert.equal(checks, 2);
 	const none = harness(t, (root) => set(root, "1.4.0", "0.30.0"), (root) => set(root, "1.4.0", "0.30.0"));
 	let idleChecks = 0;
 	const quiet = new UpdateSession({ ...none.host, changedOnDisk: () => {
@@ -822,4 +822,16 @@ test("a package update with a changed package but no launcher: a reload under th
 	await session.apply(actions(h));
 	assert.deepEqual(h.calls, ["reload"]);
 	assert.equal(h.guards.length, 2);
+});
+
+test("a package changed on disk while the session waited for idle: apply checks again and restarts (review 1)", async (t) => {
+	const { h, session } = reloadReady(t);
+	h.signals = { ...h.signals, agentIdle: false };
+	session.poll();
+	assert.deepEqual(h.calls, [], "busy: the check ran and found nothing");
+	h.changed = ["/release/node_modules/remote-pi/dist/index.js"];
+	h.signals = { ...h.signals, agentIdle: true };
+	session.poll();
+	await session.apply(actions(h));
+	assert.deepEqual(h.calls, ["dispatch", "shutdown"]);
 });

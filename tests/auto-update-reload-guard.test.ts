@@ -95,7 +95,10 @@ test("processReloadGuard is one object per process, kept across module loads", (
 	assert.equal(processReloadGuard(), processReloadGuard());
 });
 
-/** Events in random order: the listener exists exactly while a window is open, and each rejection in a window reaches one reporter once. */
+/**
+ * Events in random order: the listener exists exactly while a window is open; each rejection in a window reaches a
+ * reporter once and in order, unless the window closed while no reporter was set (then only the log has it).
+ */
 test("random orders of arm, reject, reporter and time keep the invariants", () => {
 	for (let seed = 1; seed <= 300; seed++) {
 		let s = seed;
@@ -108,6 +111,8 @@ test("random orders of arm, reject, reporter and time keep the invariants", () =
 		let now = 0;
 		let caught = 0;
 		const seen: string[] = [];
+		const expected: string[] = [];
+		let waiting: string[] = [];
 		let reporter = false;
 		for (let step = 0; step < 40; step++) {
 			const event = rand(5);
@@ -119,19 +124,36 @@ test("random orders of arm, reject, reporter and time keep the invariants", () =
 				if (open) {
 					caught++;
 					f.reject(new Error(`e${caught}`));
+					(reporter ? expected : waiting).push(`Error: e${caught}`);
 				}
 			} else if (event === 2) {
 				reporter = !reporter;
 				f.guard.setReporter(reporter ? (text) => seen.push(text) : undefined);
+				if (reporter) {
+					expected.push(...waiting);
+					waiting = [];
+				}
 			} else {
 				const ms = rand(400);
+				if (now < until && now + ms >= until) waiting = [];
 				now += ms;
 				f.advance(ms);
 			}
 			assert.equal(f.listeners(), now < until ? 1 : 0, `seed ${seed} step ${step}: listener while open only`);
 		}
 		f.guard.setReporter((text) => seen.push(text));
-		assert.deepEqual(seen, Array.from({ length: caught }, (_, i) => `Error: e${i + 1}`), `seed ${seed}: each once, in order`);
+		expected.push(...waiting);
+		assert.deepEqual(seen, expected, `seed ${seed}: each once, in order`);
 		f.guard.disarm();
 	}
+});
+
+test("disarm drops errors that no reporter took: the log has them, and a later session must not show them as new (review 6)", () => {
+	const f = fake();
+	const seen: string[] = [];
+	f.guard.arm(1000, () => {});
+	f.reject(new Error("old"));
+	f.advance(1000);
+	f.guard.setReporter((text) => seen.push(text));
+	assert.equal(seen.length, 0);
 });

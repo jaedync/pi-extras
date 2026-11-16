@@ -33,7 +33,8 @@ mkdirSync(ext);
 function writeExtension(version: 1 | 2): void {
 	writeFileSync(join(ext, "package.json"), JSON.stringify({ name: "mixed-modules", type: "module" }));
 	writeFileSync(join(ext, "config.js"), version === 1 ? "export const a = () => 1;\n" : "export const a = () => 2;\nexport const b = () => 'new';\n");
-	// The bare import makes Pi's loader hand this file to Node's own ESM loader, as for remote-pi's dist files.
+	// With a bare import, as in remote-pi's dist files, Pi's loader reads index.js again at the reload but
+	// gives it config.js from a cache. Without one, both files load fresh (probe, 2026-11-16).
 	writeFileSync(join(ext, "index.js"), version === 1
 		? "import { Type } from 'typebox';\nimport { a } from './config.js';\nexport default function () { void Type; globalThis.__mixed = 'v1 ' + a(); }\n"
 		: "import { Type } from 'typebox';\nimport { a, b } from './config.js';\nexport default function () { void Type; globalThis.__mixed = 'v2'; void (async () => { await null; try { globalThis.__mixed = 'v2 ' + b(); } finally { globalThis.__mixedDone(); } })(); }\n");

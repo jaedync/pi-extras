@@ -6,6 +6,11 @@
  * short window around each update reload this guard listens, logs the error
  * and tells the user. After the window, Node's own handling is back.
  *
+ * A synchronous throw from a timer or an event callback is an uncaught
+ * exception, which Pi's own handler turns into an exit before any listener
+ * here could act. The guard cannot keep Pi alive then; the restart in place of
+ * a reload (in-place.ts) is the protection for that case.
+ *
  * One guard per process, on globalThis: the reload loads this module again,
  * and the new module must reach the listener that the old one added.
  */
@@ -63,6 +68,8 @@ export class ReloadGuard {
 		this.stopTimer();
 		this.stopTimer = undefined;
 		this.target.off("unhandledRejection", this.listener);
+		// The log has them; a session that starts hours later must not show them as new.
+		this.pending = [];
 	}
 
 	/** The live session's notice, or undefined while no session can show one. Errors caught meanwhile wait for the next reporter. */
