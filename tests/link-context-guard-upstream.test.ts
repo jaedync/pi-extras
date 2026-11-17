@@ -207,10 +207,13 @@ async function socks4(): Promise<Closable & { readonly targets: string[] }> {
 	return { port, targets, close };
 }
 
+/**
+ * A port where nothing listens. Port 1 needs root to bind, so no other test can take it. A port that a test frees
+ * again can be taken by a parallel test's server at once: once that was another guard proxy, and the "down" proxy
+ * answered 403.
+ */
 async function closedPort(): Promise<number> {
-	const { port, close } = await listening(createServer());
-	await close();
-	return port;
+	return 1;
 }
 
 interface Step { readonly kind: "get" | "connect"; readonly host: string; readonly port: number; readonly path: string }
