@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.47.1 - 2026-11-17
+
+### Fixed
+
+- Rate-limit Recovery: on Pi 1.5, a dropped connection got only Pi's short
+  retry (about 14 s), and then the run stopped. Pi 1.5 adds the cause to an
+  SDK connection error ("Connection error.: other side closed
+  (UND_ERR_SOCKET)"), and the classifier matched only the old text. It now
+  reads the SDK's own text before the cause.
+
 ## 0.47.0 - 2026-11-17
 
 ### Added
