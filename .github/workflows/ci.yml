@@ -8,6 +8,11 @@ on:
     - cron: '17 11 * * *'
 permissions:
   contents: read
+# A new commit on a PR cancels the PR's run in progress. Pushes, tags and the schedule get a group of their own run, so
+# no run on main is ever cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   # Each OS and Node pair runs the whole suite, split over shards: scripts/test-files.mjs packs the unit test files by
   # the seconds in .ci/timings.json, and tests/test-shards.test.mjs checks that the shards of every count cover each
