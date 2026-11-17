@@ -7,6 +7,12 @@ export interface RecoveryConfig {
 	readonly resumeMarginSeconds: number;
 	/** Aggregate wait budget for one user-started run, including margins. */
 	readonly maxWaitSeconds: number;
+	/**
+	 * "run": a plan-window wait counts against maxWaitSeconds for the run, as every wait does.
+	 * "each": each plan-window wait gets its own maxWaitSeconds, so a long run can wait at several
+	 * 5h resets; maxRecoveries still caps the count. Other limits always keep the run's budget.
+	 */
+	readonly planWaitBudget: "run" | "each";
 	readonly maxRecoveries: number;
 	/** Anthropic subscription stall watchdog after response headers; 0 disables. */
 	readonly anthropicFirstEventSeconds: number;
@@ -20,7 +26,7 @@ export interface RecoveryConfig {
 
 export const SECTION = "rateLimitRecovery";
 export const DEFAULT_CONFIG: RecoveryConfig = Object.freeze({
-	autoWait: false, resumeMarginSeconds: 10, maxWaitSeconds: 18_000, maxRecoveries: 10,
+	autoWait: false, resumeMarginSeconds: 10, maxWaitSeconds: 18_000, planWaitBudget: "run", maxRecoveries: 10,
 	anthropicFirstEventSeconds: DEFAULT_FIRST_EVENT_SECONDS,
 	transientMaxWaitSeconds: 180,
 	localRetry: true, localProviders: Object.freeze([]) as readonly string[],
@@ -57,6 +63,7 @@ export function normalizeConfig(raw: unknown): RecoveryConfig {
 		autoWait: r.autoWait === true,
 		resumeMarginSeconds: bounded(r.resumeMarginSeconds, DEFAULT_CONFIG.resumeMarginSeconds, 0, MAX_MARGIN_SECONDS),
 		maxWaitSeconds: bounded(r.maxWaitSeconds, DEFAULT_CONFIG.maxWaitSeconds, 0, MAX_WAIT_SECONDS),
+		planWaitBudget: r.planWaitBudget === "each" ? "each" : "run",
 		maxRecoveries: bounded(r.maxRecoveries, DEFAULT_CONFIG.maxRecoveries, 0, MAX_RECOVERIES, true),
 		anthropicFirstEventSeconds: optional(r.anthropicFirstEventSeconds, DEFAULT_CONFIG.anthropicFirstEventSeconds, MIN_FIRST_EVENT_SECONDS, MAX_FIRST_EVENT_SECONDS),
 		transientMaxWaitSeconds: optional(r.transientMaxWaitSeconds, DEFAULT_CONFIG.transientMaxWaitSeconds, MIN_TRANSIENT_SECONDS, MAX_TRANSIENT_SECONDS),

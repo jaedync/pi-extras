@@ -84,7 +84,7 @@ function reject(res: ServerResponse, rejection: Rejection): void {
 	res.end();
 }
 
-async function endpoint(fixture: Fixture, rejection: Rejection, recover = true) {
+async function endpoint(fixture: Fixture, rejection: Rejection | ((attempt: number) => Rejection), recover = true, rejections = 1) {
 	const requests: { entries: readonly any[] }[] = [];
 	const errors: unknown[] = [];
 	let entries: () => readonly any[] = () => [];
@@ -98,8 +98,8 @@ async function endpoint(fixture: Fixture, rejection: Rejection, recover = true) 
 				const body = Buffer.concat(chunks);
 				JSON.parse((req.headers["content-encoding"] === "zstd" ? zstdDecompressSync(body, { maxOutputLength: 1_000_000 }) : body).toString("utf8"));
 				requests.push({ entries: [...entries()] });
-				if (recover && requests.length === 2) success(res);
-				else reject(res, rejection);
+				if (recover && requests.length === rejections + 1) success(res);
+				else reject(res, typeof rejection === "function" ? rejection(requests.length) : rejection);
 			} catch (error) { errors.push(error); res.writeHead(500).end(); }
 		});
 	});
@@ -161,10 +161,10 @@ function planReadings(entries: (now: number) => object[] | undefined) {
 	return { store, polls };
 }
 
-async function mainSession(baseUrl: string, fixture: Fixture, limits = planReadings(() => undefined)) {
+async function mainSession(baseUrl: string, fixture: Fixture, limits = planReadings(() => undefined), config: Record<string, unknown> = {}) {
 	const agentDir = mkdtempSync(join(scratch, "main-"));
 	const configFile = join(agentDir, "pi-extras.json");
-	writeFileSync(configFile, JSON.stringify({ rateLimitRecovery: { autoWait: true } }));
+	writeFileSync(configFile, JSON.stringify({ rateLimitRecovery: { autoWait: true, ...config } }));
 	const { runtime, model } = await runtimeFor(baseUrl, fixture);
 	const settingsManager = sdk.SettingsManager.inMemory({ compaction: { enabled: false }, cacheWarming: "off", transport: "sse", retry });
 	let now = NOW;
@@ -316,6 +316,27 @@ test("an actual child fails fast on a Codex plan limit with the reset time, desp
 	assert.match(done.error ?? "", /Subagents never automatically wait or resume/);
 	assert.match(done.error ?? "", new RegExp(`Expected reset at ${new Date(resetsAtMs).toISOString().replace(/\./g, "\\.")}`));
 	assert.deepEqual(errors, []);
+});
+
+for (const planWaitBudget of ["run", "each"] as const) test(`a long run that meets two 5h plan resets waits ${planWaitBudget === "each" ? "at both (planWaitBudget each)" : "once, then stops (one budget per run)"}`, { timeout: 10_000 }, async (t) => {
+	// The second rejection comes 4 h after the first wait: together they pass the 5 h run budget.
+	const resets = [NOW + 4 * HOUR_MS, NOW + 8 * HOUR_MS + 30 * 60_000];
+	const http = await endpoint(codex, (attempt) => ({ kind: "codex-429", resetsAtMs: resets[attempt - 1] ?? resets[1]!, windowMinutes: 300 }), planWaitBudget === "each", 2);
+	t.after(() => http.close());
+	const f = await mainSession(http.baseUrl, codex, undefined, { planWaitBudget });
+	t.after(() => f.close());
+	await bounded(f.session.prompt("Continue the long task."), () => f.session.abort());
+	assert.equal(f.waits[0], 4 * HOUR_MS + 10_000);
+	if (planWaitBudget === "run") {
+		assert.equal(http.requests.length, 2);
+		assert.equal(f.waits.length, 1);
+		assert.match(failure(f), /aggregate automatic wait budget for this run has been reached/);
+		return;
+	}
+	assert.equal(http.requests.length, 3);
+	assert.equal(f.waits.length, 2);
+	assert.equal(f.session.getLastAssistantText(), "Recovered after the plan reset.");
+	assert.equal(notes(f.session.sessionManager.getEntries()).length, 2);
 });
 
 test.after(() => {

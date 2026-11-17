@@ -73,7 +73,9 @@ export function planWait(limit: CapturedLimit, config: RecoveryConfig, spentMs: 
 	const resumeAtMs = limit.resetAtMs + config.resumeMarginSeconds * 1000;
 	const delayMs = Math.max(0, Math.ceil(resumeAtMs - now));
 	if (delayMs > config.maxWaitSeconds * 1000) return "too-long";
-	if (spentMs + delayMs > config.maxWaitSeconds * 1000) return "wait-budget";
+	// A plan window's reset is exact (provider or fresh reading), so it may have a budget of its own.
+	const ownBudget = limit.kind === "plan" && config.planWaitBudget === "each";
+	if (!ownBudget && spentMs + delayMs > config.maxWaitSeconds * 1000) return "wait-budget";
 	return { delayMs, pausedAtMs: now, resumeAtMs };
 }
 

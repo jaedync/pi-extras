@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { captureLimit, failureMessage, parseRateLimit, planWait, resumedMessage, scopeFor, sameScope } from "../lib/rate-limit-recovery/core.ts";
+import { captureLimit, capturePlanLimit, failureMessage, parseRateLimit, planWait, resumedMessage, scopeFor, sameScope } from "../lib/rate-limit-recovery/core.ts";
 import { DEFAULT_CONFIG, normalizeConfig } from "../lib/rate-limit-recovery/config.ts";
 import { openaiLogin } from "./support/plan-login.ts";
 
@@ -111,4 +111,22 @@ test("the Anthropic stall watchdog is on by default, bounded, and 0 disables it"
 	assert.equal(normalizeConfig({ anthropicFirstEventSeconds: 5 }).anthropicFirstEventSeconds, 10);
 	assert.equal(normalizeConfig({ anthropicFirstEventSeconds: 601 }).anthropicFirstEventSeconds, 600);
 	for (const invalid of [-1, "30", Infinity, null]) assert.equal(normalizeConfig({ anthropicFirstEventSeconds: invalid }).anthropicFirstEventSeconds, 45);
+});
+
+test("planWaitBudget each: a plan-window wait has its own budget; other limits keep the run's budget", () => {
+	const each = normalizeConfig({ autoWait: true, planWaitBudget: "each" });
+	assert.equal(each.planWaitBudget, "each");
+	assert.equal(DEFAULT_CONFIG.planWaitBudget, "run");
+	for (const value of [undefined, "each ", "per-wait", 1, true]) assert.equal(normalizeConfig({ planWaitBudget: value }).planWaitBudget, "run", String(value));
+	const codexPlan = { provider: "openai-codex", model: "gpt-6.2-sol", api: "openai-codex-responses" };
+	// Four hours already spent in this run; the next 5h window resets in 3 h.
+	const spent = 4 * 3600_000;
+	const plan = capturePlanLimit(codexPlan, NOW, { resetAtMs: NOW + 3 * 3600_000, window: "5h" });
+	assert.deepEqual(planWait(plan, each, spent, 1, NOW), { delayMs: 3 * 3600_000 + 10_000, pausedAtMs: NOW, resumeAtMs: NOW + 3 * 3600_000 + 10_000 });
+	assert.equal(planWait(plan, { ...each, planWaitBudget: "run" }, spent, 1, NOW), "wait-budget", "the default keeps one budget per run");
+	assert.equal(planWait(plan, each, spent, each.maxRecoveries, NOW), "attempt-limit", "maxRecoveries still caps the waits");
+	const week = capturePlanLimit(codexPlan, NOW, { resetAtMs: NOW + 2 * 24 * 3600_000, window: "7d" });
+	assert.equal(planWait(week, each, 0, 0, NOW), "too-long", "one wait still fits in maxWaitSeconds");
+	const rate = captureLimit(model, { retryAfterSeconds: 3 * 3600 }, NOW);
+	assert.equal(planWait(rate, each, spent, 1, NOW), "wait-budget", "a structured rate limit keeps the run's budget");
 });

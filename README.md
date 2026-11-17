@@ -291,6 +291,10 @@ that no set and no session uses is removed after 1 hour.
   `rateLimitRecovery` in `pi-extras.json`: `autoWait` (default `false`),
   `resumeMarginSeconds` (default `10`, `0` to `3600`), `maxWaitSeconds` (default
   and hard maximum `18000`, five hours total per user-started run),
+  `planWaitBudget` (default `"run"`; `"each"` gives each ChatGPT plan-window
+  wait its own `maxWaitSeconds`, so a long run can wait at several 5-hour
+  resets; `maxRecoveries` still caps the count, and other limits keep the
+  run's budget),
   `maxRecoveries` (default and maximum `10`), `anthropicFirstEventSeconds`
   (default `45`, `10` to `600`, `0` disables the Anthropic stall retry),
   `transientMaxWaitSeconds` (default `180`, `10` to `900`, `0` leaves short rate
