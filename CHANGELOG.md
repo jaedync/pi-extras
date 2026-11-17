@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Fixed
+
+- Speed Up CI: `ci.mjs timings` kept absolute paths when the test runner
+  named files through a symlink that the root did not use, or the reverse.
+  On macOS the temp folder `/var` is a link to `/private/var`, so the skill's
+  own test failed there. Paths outside the root are now compared again with
+  both sides resolved.
+
 ## 0.47.1 - 2026-11-17
 
 ### Fixed

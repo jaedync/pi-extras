@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { after, test } from "node:test";
@@ -113,6 +113,19 @@ test("a Vitest or Jest JSON report gives seconds per file relative to the root",
 		{ name: "/elsewhere/c.test.ts", startTime: 0, endTime: 1000 },
 	] };
 	assert.deepEqual(Object.fromEntries(parseJsonReport(report, "/repo")), { "src/a.test.ts": 2.5, "src/b.test.ts": 0.5, "/elsewhere/c.test.ts": 1 });
+});
+
+test("a root reached through a symlink still makes report paths relative, as /var and /private/var on macOS", () => {
+	const real = temp();
+	mkdirSync(join(real, "src"));
+	writeFileSync(join(real, "src", "a.test.ts"), "");
+	const link = join(temp(), "link");
+	symlinkSync(real, link);
+	const report = { testResults: [{ name: join(real, "src", "a.test.ts"), startTime: 0, endTime: 1000 }] };
+	assert.deepEqual(Object.fromEntries(parseJsonReport(report, link)), { "src/a.test.ts": 1 });
+	const viaLink = { testResults: [{ name: join(link, "src", "a.test.ts"), startTime: 0, endTime: 1000 }] };
+	assert.deepEqual(Object.fromEntries(parseJsonReport(viaLink, real)), { "src/a.test.ts": 1 });
+	assert.deepEqual(Object.fromEntries(parseJunit(`<testsuite name="${join(real, "src", "a.test.ts")}" time="2"></testsuite>`, link)), { "src/a.test.ts": 2 });
 });
 
 test("merged timings keep the longest time of a file that two reports name", () => {

@@ -1,12 +1,33 @@
-import { isAbsolute, relative, sep } from "node:path";
+import { realpathSync } from "node:fs";
+import { dirname, basename, isAbsolute, join, relative, sep } from "node:path";
 
 const TEST_FILE = /\.(m?[jt]sx?|c[jt]s|py|rb|go|rs|java|kt|php|ex|exs)$/;
 
-/** A repository-relative path with forward slashes, or the path as given when it is outside the root. */
+/** The real path, or the path as given when it does not exist. The folder is resolved when the file is gone. */
+function real(path) {
+	try {
+		return realpathSync(path);
+	} catch {
+		try {
+			return join(realpathSync(dirname(path)), basename(path));
+		} catch {
+			return path;
+		}
+	}
+}
+
+/**
+ * A repository-relative path with forward slashes, or the path as given when it is outside the root. A test runner
+ * can name files through a symlink that the root does not use, or the reverse (on macOS, the temp folder /var is a
+ * link to /private/var), so a path outside the root is compared again with both sides resolved.
+ */
 function normalize(path, root) {
-	const rel = isAbsolute(path) ? relative(root, path) : path;
-	const inside = !rel.startsWith("..") && !isAbsolute(rel);
-	return (inside ? rel : path).split(sep).join("/");
+	if (!isAbsolute(path)) return path.split(sep).join("/");
+	for (const [from, to] of [[root, path], [real(root), real(path)]]) {
+		const rel = relative(from, to);
+		if (!rel.startsWith("..") && !isAbsolute(rel)) return rel.split(sep).join("/");
+	}
+	return path.split(sep).join("/");
 }
 
 /** @param {string} tag */
