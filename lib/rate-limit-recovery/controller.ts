@@ -258,19 +258,26 @@ export class Recovery {
 		if (!found && !isPlanLimitText(message.errorMessage)) return undefined;
 		const window = found?.windowMinutes !== undefined ? windowName(found.windowMinutes) : undefined;
 		if (found?.resetAtMs !== undefined) return capturePlanLimit(message, observedAtMs, { resetAtMs: found.resetAtMs, ...(window ? { window } : {}) });
-		await this.pollPlan(message.provider);
+		// A forced poll holds the failed turn: only a session that can wait pays for it. The others read the store.
+		if (this.interactiveMain(ctx) && this.config.autoWait && ctx.signal && !ctx.signal.aborted) await this.pollPlan(message.provider, ctx.signal);
 		const reset = resetFromReadings(this.limits.get(limitKey(message.provider)), observedAtMs);
 		return capturePlanLimit(message, observedAtMs, typeof reset === "string" ? { readingRefusal: reset, ...(window ? { window } : {}) } : reset);
 	}
 
-	private async pollPlan(provider: string): Promise<void> {
+	private async pollPlan(provider: string, run: AbortSignal): Promise<void> {
 		let timer: ReturnType<typeof setTimeout> | undefined;
+		let aborted = () => {};
 		try {
-			await Promise.race([this.limits.refresh(provider, true), new Promise<void>((resolve) => { timer = setTimeout(resolve, PLAN_POLL_MS); })]);
+			// Esc ends the hold at once; the poll itself goes on and updates the store.
+			await Promise.race([this.limits.refresh(provider, true), new Promise<void>((resolve) => {
+				timer = setTimeout(resolve, PLAN_POLL_MS);
+				aborted = resolve;
+				run.addEventListener("abort", aborted, { once: true });
+			})]);
 		} catch (error) {
 			// A failed poll leaves the last reading; resetFromReadings then decides from it or refuses.
 			operationalError(join(dirname(this.file), "rate-limit-recovery.log"), RECOVERY_TYPE, `plan limit poll failed (${error instanceof Error ? error.name : "unknown error"})`);
-		} finally { clearTimeout(timer); }
+		} finally { clearTimeout(timer); run.removeEventListener("abort", aborted); }
 	}
 
 	private async messageEnd(event: MessageEndEvent, ctx: ExtensionContext): Promise<MessageEndEventResult | undefined> {
@@ -280,9 +287,11 @@ export class Recovery {
 		if (transient) { takePlanHint(ctx.signal); return { message: transient }; }
 		if (event.message.stopReason !== "error") { takePlanHint(ctx.signal); return undefined; }
 		const parsed = parseRateLimit(event.message.errorMessage);
+		const epoch = this.generation;
 		const limit = parsed ? captureLimit(event.message, parsed, this.now()) : await this.planLimit(event.message, ctx);
 		if (parsed) takePlanHint(ctx.signal);
-		if (!limit || this.stopped) return undefined;
+		// The poll can outlive the session: a limit of the old run must not reach a new one.
+		if (!limit || this.stopped || this.generation !== epoch) return undefined;
 		this.limited = limit;
 		const plan = planWait(limit, this.config, this.spentMs, this.attempts, this.now());
 		const reason = this.reasonFor(ctx, limit, plan);

@@ -22,8 +22,9 @@ import { providerFamily } from "../provider-family.ts";
 const PLAN_FAMILY = "openai-codex";
 const MAX_ERROR_CHARS = 32_768;
 const PLAN_TYPES = new Set(["usage_limit_reached", "subscription_sharing_usage_limit_exceeded"]);
-// The code, the provider's prose for it, and the text Pi's Codex provider writes for a usage-limit 429.
-const PLAN_TEXT = /\bsubscription_sharing_usage_limit_exceeded\b|has reached their Subscription Sharing usage limit|\busage_limit_reached\b|You have hit your ChatGPT usage limit/;
+// Sign in with ChatGPT's code and its prose. Not Pi's "You have hit your ChatGPT usage limit": Pi writes
+// it for every Codex 429, so a Codex limit counts only with the structure the transport kept.
+const PLAN_TEXT = /\bsubscription_sharing_usage_limit_exceeded\b|has reached their Subscription Sharing usage limit/;
 // A ChatGPT Business admin sets this one; it is no plan window and only the admin can raise it.
 const WORKSPACE_LIMIT = /workplace_individual_usage_limit|workspace admin/i;
 // A weekly window plus margin; a reset further out is a wrong value, not a long wait.

@@ -34,10 +34,8 @@ function planLimit(message: Extract<MessageEndEvent["message"], { role: "assista
 	});
 }
 
-function quotaResult(event: MessageEndEvent, ctx: ExtensionContext): MessageEndEventResult | undefined {
-	if (event.message.role !== "assistant") return undefined;
-	const hint = takePlanHint(ctx.signal);
-	if (event.message.stopReason !== "error") return undefined;
+function quotaResult(event: MessageEndEvent, ctx: ExtensionContext, hint: ReturnType<typeof takePlanHint>): MessageEndEventResult | undefined {
+	if (event.message.role !== "assistant" || event.message.stopReason !== "error") return undefined;
 	const now = Date.now();
 	const parsed = parseRateLimit(event.message.errorMessage);
 	const limit = parsed ? captureLimit(event.message, parsed, now) : planLimit(event.message, hint, now);
@@ -92,9 +90,11 @@ export function createChildRateLimitGuard(options: ChildGuardOptions = {}) {
 	const dispose = () => { closed = true; transient.cancel(); release(); };
 	const messageEnd = (event: MessageEndEvent, ctx: ExtensionContext): MessageEndEventResult | undefined => {
 		if (closed || event.message.role !== "assistant") return undefined;
+		// A plan hint describes only this reply: take it on every path, so no later error can claim it.
+		const hint = takePlanHint(ctx.signal);
 		// First for every reply: it also discards a Retry-After hint the quota path does not use.
 		const replaced = transient.messageEnd(event.message, ctx);
-		return replaced ? { message: replaced } : quotaResult(event, ctx);
+		return replaced ? { message: replaced } : quotaResult(event, ctx, hint);
 	};
 	const extension: InlineExtension = {
 		name: CHILD_GUARD_NAME,
