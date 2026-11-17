@@ -1,4 +1,5 @@
 /** Shared shapes for the subagents team. Records are replaced, never mutated. */
+import type { CapturedLimit } from "../rate-limit-recovery/core.ts";
 import type { Thinking } from "./models.ts";
 import type { LaunchStamp } from "./stamp.ts";
 
@@ -186,6 +187,24 @@ export interface AgentRecord {
 	checkSkipped?: number;
 	/** The latest run that changed files (`Team.changed`); without a check, its report says nobody checked them (checks.ts). */
 	changedRun?: number;
+	/** Its waits for a ChatGPT plan reset in run `run`, and the wait under way (plan-wait.ts). */
+	planWait?: PlanWaitState;
+}
+
+/** A run's waits for a ChatGPT plan reset (plan-wait.ts); the times are epoch milliseconds. */
+export interface PlanWaitState {
+	/** The run these counts belong to; a new run starts with none. */
+	run: number;
+	/** Waits begun in that run. */
+	waits: number;
+	/** How long its ended waits took. */
+	waitedMs: number;
+	/** The wait under way: when it began, the reset, and when the run goes on. Unset between waits. */
+	pausedAt?: number;
+	resetAt?: number;
+	resumeAt?: number;
+	/** The full plan window, such as `5h`. */
+	window?: string;
 }
 
 /** A check as a spawn or a message set it (checks.ts). */
@@ -279,6 +298,8 @@ export interface ChildHandle {
 	toolsRunning?(): boolean;
 	/** Runs a check command as the child's bash would, in its directory and with its shell settings and sandbox. */
 	check?(command: string, options: { timeoutMs: number; signal: AbortSignal; id: string }): Promise<CheckRun>;
+	/** The ChatGPT plan limit its last reply met, as its quota guard captured it (rate-limit-recovery/child.ts). */
+	planLimit?(): CapturedLimit | undefined;
 }
 
 export interface ChildHooks {

@@ -34,7 +34,11 @@ function planLimit(message: Extract<MessageEndEvent["message"], { role: "assista
 	});
 }
 
-function quotaResult(event: MessageEndEvent, ctx: ExtensionContext, hint: ReturnType<typeof takePlanHint>): MessageEndEventResult | undefined {
+/** The parent harness may wait for a plan reset (lib/subagents/plan-wait.ts); the child's own session never does. */
+const PLAN_REASON = "The subagent's own session never waits. Choose another provider or retry after the reset.";
+const QUOTA_REASON = "Subagents never automatically wait or resume. Choose another provider or retry after the reset.";
+
+function quotaResult(event: MessageEndEvent, ctx: ExtensionContext, hint: ReturnType<typeof takePlanHint>): { result: MessageEndEventResult; limit: CapturedLimit } | undefined {
 	if (event.message.role !== "assistant" || event.message.stopReason !== "error") return undefined;
 	const now = Date.now();
 	const parsed = parseRateLimit(event.message.errorMessage);
@@ -42,7 +46,8 @@ function quotaResult(event: MessageEndEvent, ctx: ExtensionContext, hint: Return
 	if (!limit) return undefined;
 	// Keep the error intact for the parent while preventing native turn retries.
 	ctx.abort();
-	return { message: { ...event.message, errorMessage: failureMessage(limit, now, "Subagents never automatically wait or resume. Choose another provider or retry after the reset.") } };
+	const reason = limit.kind === "plan" ? PLAN_REASON : QUOTA_REASON;
+	return { result: { message: { ...event.message, errorMessage: failureMessage(limit, now, reason) } }, limit };
 }
 
 function namesFallback(section: unknown): boolean {
@@ -73,6 +78,8 @@ export function createChildRateLimitGuard(options: ChildGuardOptions = {}) {
 	let record: ((entry: ConnectionEvidence) => void) | undefined;
 	const transient = new TransientBackoff({ ...options.transient, budgetMs: () => budgetMs, local: () => local, onFailure: () => warn(options, "transient-wait-failed"), record: (entry) => record?.(entry) });
 	let failure: string | undefined;
+	/** The ChatGPT plan limit of the last reply, for the parent harness (team.ts); a later reply clears it. */
+	let plan: CapturedLimit | undefined;
 	let closed = false;
 	// Only request boundaries may move a guard to another API (see controller).
 	const protect = (ctx: ExtensionContext, model = ctx.model, retarget = false) => {
@@ -94,14 +101,18 @@ export function createChildRateLimitGuard(options: ChildGuardOptions = {}) {
 		const hint = takePlanHint(ctx.signal);
 		// First for every reply: it also discards a Retry-After hint the quota path does not use.
 		const replaced = transient.messageEnd(event.message, ctx);
-		return replaced ? { message: replaced } : quotaResult(event, ctx, hint);
+		plan = undefined;
+		if (replaced) return { message: replaced };
+		const quota = quotaResult(event, ctx, hint);
+		if (quota?.limit.kind === "plan") plan = quota.limit;
+		return quota?.result;
 	};
 	const extension: InlineExtension = {
 		name: CHILD_GUARD_NAME,
 		factory(pi) {
 			record = (entry) => pi.appendEntry(RECOVERY_TYPE, entry);
-			pi.on("session_start", (_event, ctx) => { closed = false; failure = undefined; transient.reset(); loadBudget(); release(); protect(ctx); });
-			pi.on("before_agent_start", (_event, ctx) => { transient.reset(); protect(ctx, ctx.model, true); });
+			pi.on("session_start", (_event, ctx) => { closed = false; failure = undefined; plan = undefined; transient.reset(); loadBudget(); release(); protect(ctx); });
+			pi.on("before_agent_start", (_event, ctx) => { transient.reset(); plan = undefined; protect(ctx, ctx.model, true); });
 			// Queued work can already have continued the run.
 			pi.on("context", (_event, ctx) => { transient.consumeReady(); protect(ctx, ctx.model, true); });
 			pi.on("model_select", (event, ctx) => protect(ctx, event.model));
@@ -111,7 +122,7 @@ export function createChildRateLimitGuard(options: ChildGuardOptions = {}) {
 			pi.on("agent_before_settle", (event) => transient.consumeReady() && !closed && event.context.canContinue ? { continue: true } : undefined);
 		},
 	};
-	return { extension, dispose, failure: () => failure };
+	return { extension, dispose, failure: () => failure, planLimit: () => plan };
 }
 
 export const childRateLimitGuard: InlineExtension = {

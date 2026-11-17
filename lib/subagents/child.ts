@@ -726,6 +726,7 @@ function handleFor(session: AgentSession, hooks: ChildHooks, context: ChildConte
 			else gate.steer(text);
 		},
 		abort: () => gate.abort(),
+		planLimit: () => guard.planLimit(),
 		steering: () => gate.steering(),
 		toolsRunning: () => pendingCalls(session) > 0,
 		lastText: () => session.getLastAssistantText(),

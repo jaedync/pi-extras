@@ -7,7 +7,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { isReserved, nameFor } from "./names.ts";
 import { isThinking } from "./models.ts";
 import { latestReportFile, reportFilePath, reportRun } from "./reports.ts";
-import { LIVE_STATES, MAX_DEPTH, NO_USAGE, type AgentRecord, type CheckResult, type CheckSpec, type FallbackStep } from "./types.ts";
+import { LIVE_STATES, MAX_DEPTH, NO_USAGE, type AgentRecord, type CheckResult, type CheckSpec, type FallbackStep, type PlanWaitState } from "./types.ts";
 import { checkError } from "./checks.ts";
 import { validWorktree } from "./worktree.ts";
 import { CONTROL } from "./checkout.ts";
@@ -146,8 +146,16 @@ function validRecord(value: unknown): value is AgentRecord {
 		&& (r.runCost === undefined || (Number.isFinite(r.runCost) && r.runCost >= 0))
 		&& (r.runStart === undefined || validRunStart(r.runStart))
 		&& (r.checkSkipped === undefined || (Number.isInteger(r.checkSkipped) && r.checkSkipped >= 0))
-		&& (r.changedRun === undefined || (Number.isInteger(r.changedRun) && r.changedRun >= 0));
+		&& (r.changedRun === undefined || (Number.isInteger(r.changedRun) && r.changedRun >= 0))
+		&& (r.planWait === undefined || validPlanWait(r.planWait));
 }
+
+/** A saved plan wait (plan-wait.ts): counts, and the times of the wait under way. */
+const validPlanWait = (value: unknown): boolean => {
+	const w = value as PlanWaitState | null;
+	return !!w && typeof w === "object" && Number.isInteger(w.run) && w.run >= 0 && Number.isInteger(w.waits) && w.waits >= 0 && Number.isFinite(w.waitedMs) && w.waitedMs >= 0
+		&& [w.pausedAt, w.resetAt, w.resumeAt].every((at) => at === undefined || Number.isFinite(at)) && (w.window === undefined || typeof w.window === "string");
+};
 
 /**
  * A checkout is only where a child's edit lock lives, and a restore looks it

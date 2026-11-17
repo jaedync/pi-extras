@@ -33,6 +33,7 @@ const { createLauncher } = await import("../lib/subagents/child.ts");
 const { Team } = await import("../lib/subagents/team.ts");
 const { createLimitStore } = await import("../lib/limit-store.ts");
 const { setPlanAuthFile } = await import("../lib/plan-billing.ts");
+const { loadConfig } = await import("../lib/rate-limit-recovery/config.ts");
 
 // The transport checks a reset against the real clock, so the session clock starts there.
 const NOW = Math.floor(Date.now() / 1000) * 1000;
@@ -293,28 +294,64 @@ test("an openai API-key session is unchanged: no poll, no wait, Pi's own error",
 	assert.equal(notes(f.session.sessionManager.getEntries()).length, 0);
 });
 
-test("an actual child fails fast on a Codex plan limit with the reset time, despite the parent's opt-in", { timeout: 10_000 }, async (t) => {
-	const resetsAtMs = NOW + 2 * HOUR_MS;
-	const http = await endpoint(codex, { kind: "codex-429", resetsAtMs, windowMinutes: 300 }, false);
-	t.after(() => http.close());
+/** A real Team, launcher and child guard on the fixture; the plan wait's timer fires at once and moves the team's clock by its delay. */
+async function childTeam(baseUrl: string, recoveryConfig: Record<string, unknown>) {
 	const agentDir = mkdtempSync(join(scratch, "child-"));
 	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ retry, cacheWarming: "off", transport: "sse", compaction: { enabled: false } }));
-	writeFileSync(join(agentDir, "pi-extras.json"), JSON.stringify({ rateLimitRecovery: { autoWait: true } }));
-	const { runtime, model } = await runtimeFor(http.baseUrl, codex);
+	const configFile = join(agentDir, "pi-extras.json");
+	writeFileSync(configFile, JSON.stringify({ rateLimitRecovery: recoveryConfig }));
+	const { runtime, model } = await runtimeFor(baseUrl, codex);
 	const errors: unknown[] = [];
-	const team = new Team({ maxConcurrent: 1, maxDepth: 1, replyTimeoutMs: 1000, deliverToMain: () => {},
+	const delays: number[] = [];
+	let now = Date.now();
+	const team = new Team({ maxConcurrent: 1, maxDepth: 1, replyTimeoutMs: 1000, deliverToMain: () => {}, now: () => now,
+		planWait: () => loadConfig(configFile, {}),
+		planTimer: { set: (fn, ms) => { delays.push(ms); return setTimeout(() => { now += ms; fn(); }, 5); }, clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>) },
 		launcher: createLauncher({ sdk: sdk as never, agentDir, cwd: scratch, sessionDir: null, modelRuntime: async () => runtime,
 			toolsFor: () => ({ tools: [], customTools: [] }), instructions: () => "Synthetic plan-limit child. No tools or external network.", onExtensionError: (error) => errors.push(error),
 		}),
 	});
+	assert.equal(team.spawn({ name: "limited", task: "Review.", parent: "main", model: `${model.provider}/${model.id}`, readOnly: false, fork: false, blocking: false, maxMinutes: 30 }).ok, true);
+	return { team, errors, delays };
+}
+
+test("an actual child fails fast on a Codex plan limit with the reset time when subagentPlanWait is off", { timeout: 10_000 }, async (t) => {
+	const resetsAtMs = NOW + 2 * HOUR_MS;
+	const http = await endpoint(codex, { kind: "codex-429", resetsAtMs, windowMinutes: 300 }, false);
+	t.after(() => http.close());
+	const { team, errors, delays } = await childTeam(http.baseUrl, { autoWait: true, subagentPlanWait: false });
 	t.after(() => team.close());
-	assert.equal(team.spawn({ name: "limited", task: "Review.", parent: "main", model: `${model.provider}/${model.id}`, readOnly: false, fork: false, blocking: false }).ok, true);
 	const done = await bounded(team.whenDone("limited"), () => team.close());
 	assert.equal(http.requests.length, 1);
 	assert.equal(done.state, "failed");
+	assert.deepEqual(delays, []);
 	assert.match(done.error ?? "", /ChatGPT plan usage limit was reached \(the 5h window is full\)/);
-	assert.match(done.error ?? "", /Subagents never automatically wait or resume/);
+	assert.match(done.error ?? "", /The subagent's own session never waits\./);
 	assert.match(done.error ?? "", new RegExp(`Expected reset at ${new Date(resetsAtMs).toISOString().replace(/\./g, "\\.")}`));
+	assert.deepEqual(errors, []);
+});
+
+test("an actual child that meets a Codex plan limit fails fast, and its parent waits for the reset and resumes the same run once", { timeout: 10_000 }, async (t) => {
+	const resetsAtMs = NOW + 2 * HOUR_MS;
+	const http = await endpoint(codex, { kind: "codex-429", resetsAtMs, windowMinutes: 300 });
+	t.after(() => http.close());
+	const { team, errors, delays } = await childTeam(http.baseUrl, { autoWait: true });
+	t.after(() => team.close());
+	const done = await bounded(team.whenDone("limited"), () => team.close());
+	assert.deepEqual(http.errors, []);
+	assert.equal(http.requests.length, 2, "one rejected request and one continuation, no hidden retries");
+	assert.equal(done.state, "idle", done.error);
+	assert.equal(done.runs, 1, "the same run");
+	assert.equal(done.report, "Recovered after the plan reset.");
+	assert.equal(delays.length, 1);
+	assert.ok(Math.abs(delays[0]! - (resetsAtMs + 10_000 - Date.now())) < 5000, `the wait ends at the reset plus the margin: ${delays[0]} ms`);
+	assert.equal(done.planWait?.waits, 1);
+	assert.equal(done.planWait?.pausedAt, undefined);
+	const context = JSON.stringify(team.messages("limited"));
+	assert.match(context, /You waited for the ChatGPT plan usage limit to reset, from \d{4}-\d{2}-\d{2}T[^ ]+Z to [^ ]+Z \(UTC\)/);
+	assert.match(context, /The expected reset time has passed\./);
+	assert.doesNotMatch(context, /usage limit has been reached/, "no provider prose reaches the model");
+	assert.match(context, /\[Budget clock\] Now [^.]+\. 0(?:\.\d+)? of 30 work minutes used/, "the resumed prompt's clock: the wait did not use the run's maxMinutes");
 	assert.deepEqual(errors, []);
 });
 

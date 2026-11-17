@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { AgentRecord } from "./types.ts";
 import type { SubagentsConfig } from "./config.ts";
+import { restoredWaitNote } from "./plan-wait.ts";
 
 const slot = Symbol.for("pi-extras.subagents.session-owners");
 const shared = globalThis as unknown as Record<symbol, WeakMap<object, string> | undefined>;
@@ -25,6 +26,13 @@ interface RecoveryContext {
 }
 
 export function recoveryDecision(record: AgentRecord, context: RecoveryContext): { resume: boolean; why: string } {
+	const decision = decide(record, context);
+	// A child that waited for a ChatGPT plan reset says so; a resume before the reset meets the limit, and waits again (plan-wait.ts).
+	const waited = restoredWaitNote(record);
+	return waited ? { ...decision, why: `${decision.why} ${waited}` } : decision;
+}
+
+function decide(record: AgentRecord, context: RecoveryContext): { resume: boolean; why: string } {
 	if (record.restoreError) return { resume: false, why: record.restoreError };
 	if (record.parent !== "main") return { resume: false, why: `Paused. A message from its parent ${record.parent} or from main, or /subagents resume ${record.name}, resumes it.` };
 	if (context.moved) return { resume: false, why: "Paused. The workspace moved; inspect and resume explicitly in the current workspace." };

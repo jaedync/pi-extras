@@ -54,6 +54,10 @@ export interface RouteHost {
 	enqueue(name: string): void;
 	/** Starts a run of `name` on the session it holds. */
 	run(name: string, text: string): void;
+	/** Whether `name`'s run waits for a ChatGPT plan reset (plan-wait.ts). */
+	planWaiting?(name: string): boolean;
+	/** Ends that wait now: the run goes on. */
+	endPlanWait?(name: string): void;
 }
 
 /** Why a message to a paused or ended child resumes it. */
@@ -247,6 +251,12 @@ export class Routing {
 			return { ok: true, delivered: "resumed" };
 		}
 		host.patch(to, { inbox: [...(host.get(to)?.inbox ?? []), why.body] });
+		// A run that waits for a plan reset goes on now: one who may resume it asked it to (plan-wait.ts). The message is in its inbox for that launch.
+		if (host.planWaiting?.(to)) {
+			if (!resumes) return { ok: true, delivered: "inbox" };
+			host.endPlanWait?.(to);
+			return { ok: true, delivered: "resumed" };
+		}
 		return { ok: true, delivered: target.state === "queued" || target.state === "starting" ? "queued" : "inbox" };
 	}
 

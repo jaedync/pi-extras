@@ -22,6 +22,23 @@ export interface RecoveryConfig {
 	readonly localRetry: boolean;
 	/** Providers that count as local even when the automatic rule misses them. */
 	readonly localProviders: readonly string[];
+	/**
+	 * Whether the parent harness holds a subagent run that met a ChatGPT plan limit until the
+	 * reset, and then resumes it (lib/subagents/plan-wait.ts). Unset: SUBAGENT_PLAN_WAIT_DEFAULT.
+	 */
+	readonly subagentPlanWait?: boolean;
+}
+
+/**
+ * What an unset subagentPlanWait means: "autoWait" follows the main session's autoWait (owner
+ * answers 1061 and 1064), or a fixed boolean. One constant, so the default can change in one place.
+ */
+export const SUBAGENT_PLAN_WAIT_DEFAULT: boolean | "autoWait" = "autoWait";
+
+/** Whether a subagent run that meets a ChatGPT plan limit waits in its parent for the reset. */
+export function subagentPlanWaitOn(config: RecoveryConfig): boolean {
+	if (config.subagentPlanWait !== undefined) return config.subagentPlanWait;
+	return SUBAGENT_PLAN_WAIT_DEFAULT === "autoWait" ? config.autoWait : SUBAGENT_PLAN_WAIT_DEFAULT;
 }
 
 export const SECTION = "rateLimitRecovery";
@@ -71,6 +88,7 @@ export function normalizeConfig(raw: unknown): RecoveryConfig {
 		localProviders: Array.isArray(r.localProviders)
 			? r.localProviders.filter((p): p is string => typeof p === "string").map((p) => p.trim()).filter(Boolean)
 			: [],
+		...(typeof r.subagentPlanWait === "boolean" ? { subagentPlanWait: r.subagentPlanWait } : {}),
 	};
 }
 

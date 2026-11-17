@@ -10,6 +10,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { sharedLimitStore } from "../limit-store.ts";
 import { operationalLine } from "../operational-log.ts";
+import { loadConfig as loadRecoveryConfig } from "../rate-limit-recovery/config.ts";
 import { afterOrder, busyInGroup } from "./after.ts";
 import { stillWorking } from "./status.ts";
 import { HOST_VERSION, type HeldMail, type HostActivity, type HostPorts, type HostState } from "./contract.ts";
@@ -80,6 +81,8 @@ function teamFor(inputs: HostInputs, ports: HostPorts, mail: () => MainMail, pla
 		// The scope now, as the launcher checks it.
 		modelAllowed: (model) => ports.models().allowed.some((choice) => choice.ref === model),
 		log: swapLog(inputs.agentDir),
+		// Main's rateLimitRecovery settings at each plan limit, as the child guard reads them (plan-wait.ts), with main's environment switch.
+		planWait: () => loadRecoveryConfig(join(inputs.agentDir, "pi-extras.json")),
 		messagesFor: (record) => record.sessionFile && existsSync(record.sessionFile) && !record.restoreError ? scanner.messages(record.sessionFile) : [],
 		prepareResume: (record) => {
 			// The scope now, which /scoped-models or a /reload may have changed.

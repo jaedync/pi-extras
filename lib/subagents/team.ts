@@ -11,6 +11,8 @@
  * waking it: main reads it at its next turn, a child parent at its next run
  * (hand-up.ts).
  * When a child's session is held and when it goes is sessions.ts's to say.
+ * A run that met a ChatGPT plan limit with no fallback left waits for the
+ * reset without a session or slot, and goes on as the same run (plan-wait.ts).
  */
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
@@ -24,6 +26,8 @@ import { checkError, mergeCheck, RunChecks } from "./checks.ts";
 import { checkoutOf } from "./checkout.ts";
 import { EditLocks } from "./edit-lock.ts";
 import { fallbackNote, planFallback } from "./fallback.ts";
+import { decidePlanWait, endWait, type PlanTimer, planWaitActivity, planWaitNote, PlanWaits, REAL_TIMER } from "./plan-wait.ts";
+import type { RecoveryConfig } from "../rate-limit-recovery/config.ts";
 import { clockNote, runClockHead } from "./format.ts";
 import { messagesSince, stillUnread, unreadToInbox } from "./mailbox.ts";
 import { MainAnswers } from "./answers.ts";
@@ -80,6 +84,10 @@ export interface TeamOptions {
 	modelAllowed?(model: string): boolean;
 	/** Writes one line to the operational log: each swap. */
 	log?(message: string): void;
+	/** The parent's rateLimitRecovery settings, read at a plan limit (plan-wait.ts); unset, a run that meets one fails. */
+	planWait?(): RecoveryConfig | undefined;
+	/** The plan wait's timer; tests give their own. */
+	planTimer?: PlanTimer;
 }
 
 type Listener = (record: AgentRecord | null) => void;
@@ -124,6 +132,7 @@ export class Team implements HostTeam {
 	});
 	private readonly budgets: RunBudgets;
 	private readonly wrapUps: RunWrapUps;
+	private readonly planWaits: PlanWaits;
 	private readonly locks = new EditLocks(this);
 	private readonly workTrees = new WorkTrees();
 	private readonly routing: Routing;
@@ -146,6 +155,7 @@ export class Team implements HostTeam {
 			near: (name, text) => { if (!this.checks.busy(name)) this.sessions.get(name)?.steer(text); } });
 		this.sessions = new OpenSessions({ launcher: options.launcher, idle: (name) => this.records.get(name)?.state === "idle", warn: options.warn ?? console.warn,
 			...(options.idleReleaseMs !== undefined ? { idleReleaseMs: options.idleReleaseMs } : {}) });
+		this.planWaits = new PlanWaits(options.planTimer ?? REAL_TIMER, (name) => this.endPlanWait(name));
 		this.routing = this.router();
 		this.handUpHost = { questions: this.questions, routing: this.routing, list: () => this.list(), get: this.lookup, deliverToMain: (delivery) => options.deliverToMain(delivery), now: () => this.now(),
 			panelDone: (names) => { for (const name of names) this.patch(name, { panelDone: true }); } };
@@ -165,6 +175,8 @@ export class Team implements HostTeam {
 			forgetAnswer: (name) => this.forgetAnswer(name), takeInbox: (name) => this.takeInbox(name),
 			enqueue: (name) => { this.slots.enqueue(name); this.pump(); },
 			run: (name, text) => this.runWhenFree(name, text),
+			planWaiting: (name) => this.planWaits.waiting(name),
+			endPlanWait: (name) => this.endPlanWait(name),
 		});
 	}
 
@@ -409,15 +421,17 @@ export class Team implements HostTeam {
 		// Ending before its subagents stop: it can't start another meanwhile.
 		this.ending.set(name, launch);
 		this.wrapUps.end(name);
+		this.planWaits.end(name);
 		this.slots.remove(name);
 		this.parkResume(name);
 		for (const question of this.questions.of(name)) question.reject(new Error("stopped"));
 		this.checks.abort(name);
 		const handle = this.sessions.get(name);
 		this.launches.set(name, launch);
-		// An interrupted child has no run in this process; its last report stays.
-		const report = () => this.sessions.runText(name) ?? (record.state === "interrupted" ? record.report : undefined);
-		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, stopReason: options.reason, report: report(), ...this.unreadLeft(name) });
+		// An interrupted child has no run in this process, and one that waits for a plan reset let its session go; its last report stays.
+		const kept = record.state === "interrupted" || record.planWait?.pausedAt !== undefined;
+		const report = () => this.sessions.runText(name) ?? (kept ? record.report : undefined);
+		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, stopReason: options.reason, report: report(), ...this.unreadLeft(name), ...endWait(record, this.now()) });
 		for (const child of stopOrder(this.list().filter((entry) => entry.parent === name))) await this.stop(child.name, { by: name });
 		await handle?.abort().catch(() => undefined);
 		// A message relaunched it during the abort (queued, or launched already): the new run is what its parent hears of.
@@ -460,6 +474,8 @@ export class Team implements HostTeam {
 	interrupt(reason: AgentRecord["interruptedBy"] = "quit", owner?: string): void {
 		this.closed = true;
 		this.wrapUps.clear();
+		// A record that waited keeps its wait, so a restore can say so (recovery.ts).
+		this.planWaits.clear();
 		for (const name of this.resumePrompts.names()) this.parkResume(name);
 		for (const record of this.live()) this.patch(record.name, { state: "interrupted", endedAt: this.now(), blocking: false,
 			interruptedBy: reason, interruptionId: randomUUID(), interruptedOwner: owner, interruptionAnnounced: false,
@@ -695,7 +711,7 @@ export class Team implements HostTeam {
 		// Started before the state changes, so a run woken from a wait gets its clock in this prompt, not as a note steered
 		// into a session that is not working.
 		this.budgets.start(name, this.limits(record), record.usage.cost, used);
-		this.patch(name, { state: "running", ...WAITING_FOR_MODEL, runs: continued ? record.runs : record.runs + 1, endedAt: undefined,
+		this.patch(name, { state: "running", ...WAITING_FOR_MODEL, runs: continued ? record.runs : record.runs + 1, endedAt: undefined, ...endWait(record, this.now()),
 			...(continued ? {} : { runCost: record.usage.cost, runStart: { usage: { ...record.usage }, toolCalls: record.toolCalls }, budgetEnd: undefined }), ...(leavesGroup ? { group: undefined } : {}) });
 		try {
 			let next: string | null = this.withClock(name, text, continued);
@@ -831,9 +847,11 @@ export class Team implements HostTeam {
 		const record = this.records.get(name)!;
 		const plan = planFallback(record, error instanceof Error ? error.message : String(error), this.fallbackChain(), this.now());
 		if (!plan.ok) {
+			const held = this.holdForPlan(name, plan.error);
+			if (held === true) return;
 			this.continuing.delete(name);
 			this.parkResume(name);
-			return this.fail(name, plan.error);
+			return this.fail(name, held);
 		}
 		const { step } = plan;
 		// A level that was only the failed model's usual one becomes the fallback's usual one; one the call chose stays.
@@ -845,6 +863,43 @@ export class Team implements HostTeam {
 		this.resumePrompts.set(name, { note: fallbackNote(step), message: this.resumePrompts.message(name) });
 		this.patch(name, { ...this.unreadLeft(name), state: "queued", model: step.to, thinking, fallbacks: [...(record.fallbacks ?? []), step], activity: `switching to ${step.to}` });
 		void this.sessions.release(name);
+		this.slots.enqueue(name);
+		this.pump();
+	}
+
+	/**
+	 * A run that met a ChatGPT plan limit waits for the reset (plan-wait.ts): it
+	 * lets its session and slot go, its clock stops, and a timer ends the wait.
+	 * True when it waits; else the error the run fails with.
+	 */
+	private holdForPlan(name: string, error: string): true | string {
+		const record = this.records.get(name);
+		if (!record) return error;
+		let config: RecoveryConfig | undefined;
+		try { config = this.options.planWait?.(); }
+		catch (failure) { (this.options.warn ?? console.warn)(`subagents: could not read rateLimitRecovery settings: ${failure instanceof Error ? failure.message : String(failure)}`); }
+		const plan = decidePlanWait(record, this.sessions.get(name)?.planLimit?.(), error, config, this.now());
+		if (!plan.ok) return plan.error;
+		this.swaps.take(name);
+		// Read before the state change below stops the clock: the run goes on with what it had used.
+		this.continuing.set(name, this.continuing.get(name) ?? this.budgets.used(name));
+		// Its session goes, so its report so far stays on the record for a stop during the wait.
+		this.patch(name, { ...this.unreadLeft(name), state: "queued", report: this.sessions.runText(name), planWait: plan.wait, activity: planWaitActivity(plan.wait) });
+		void this.sessions.release(name);
+		this.planWaits.arm(name, plan.delayMs);
+		this.pump();
+		return true;
+	}
+
+	/** The wait ends, at its timer or at once for a message: the run goes on, the same run on the same model, when a slot is free. */
+	private endPlanWait(name: string): void {
+		this.planWaits.end(name);
+		const record = this.records.get(name);
+		const wait = record?.planWait;
+		if (this.closed || record?.state !== "queued" || wait?.pausedAt === undefined) return;
+		const now = this.now();
+		this.resumePrompts.set(name, { note: planWaitNote(wait, now), message: this.resumePrompts.message(name) });
+		this.patch(name, { ...endWait(record, now), activity: "resuming after the ChatGPT plan wait" });
 		this.slots.enqueue(name);
 		this.pump();
 	}

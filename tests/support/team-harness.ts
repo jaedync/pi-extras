@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import { Team, type TeamOptions } from "../../lib/subagents/team.ts";
 import type { AgentRecord, ChildHandle, ChildHooks, CheckRun, MainDelivery, SpawnRequest } from "../../lib/subagents/types.ts";
+import type { CapturedLimit } from "../../lib/rate-limit-recovery/core.ts";
 
 export interface Call {
 	text: string;
@@ -26,10 +27,12 @@ type HarnessOptions = Partial<TeamOptions> & {
 	check?: (record: AgentRecord, command: string, options: { timeoutMs: number; signal: AbortSignal; id: string }) => Promise<CheckRun>;
 	/** Whether an open session is current; a stale one is launched again at its next run. */
 	current?: (handle: ChildHandle) => boolean;
+	/** The ChatGPT plan limit each child's guard captured last (rate-limit-recovery/child.ts), by name. */
+	planLimits?: Map<string, CapturedLimit>;
 };
 
 export function teamHarness(options: HarnessOptions = {}) {
-	const { sessionDir = "/sessions", transcripts = new Map<string, unknown[]>(), refuse, check, current, ...teamOptions } = options;
+	const { sessionDir = "/sessions", transcripts = new Map<string, unknown[]>(), refuse, check, current, planLimits = new Map<string, CapturedLimit>(), ...teamOptions } = options;
 	const calls = new Map<string, Call[]>();
 	const steered = new Map<string, string[]>();
 	const hooks = new Map<string, ChildHooks>();
@@ -66,6 +69,7 @@ export function teamHarness(options: HarnessOptions = {}) {
 					messages: () => transcripts.get(record.name) ?? [],
 					takeQueued: () => { const queued = late.get(record.name) ?? []; late.delete(record.name); return queued; },
 					dispose: async () => undefined,
+					planLimit: () => planLimits.get(record.name),
 					...(check ? { check: (command: string, checkOptions: { timeoutMs: number; signal: AbortSignal; id: string }) => check(record, command, checkOptions) } : {}),
 				};
 			},
@@ -86,5 +90,5 @@ export function teamHarness(options: HarnessOptions = {}) {
 		steered.set(name, queue.slice(count));
 		hooks.get(name)?.update({ activity: "thinking" });
 	};
-	return { team, calls, steered, hooks, launched, aborts, late, main, transcripts, spawn, lastCall, read };
+	return { team, calls, steered, hooks, launched, aborts, late, main, transcripts, spawn, lastCall, read, planLimits };
 }
