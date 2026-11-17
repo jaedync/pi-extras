@@ -36,6 +36,14 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci --ignore-scripts
+      # Pi's jiti transforms and Node's compile cache (scripts/tmp-guard.mjs SHARED_CACHES) live in node_modules/.cache,
+      # which npm ci empties: a cold cache costs about 40 s of CPU on each shard. Both key each entry by its source, so
+      # an older cache can only miss, never serve a wrong file. main saves it; every branch and PR can read it.
+      - uses: actions/cache/restore@v4
+        with:
+          path: node_modules/.cache
+          key: test-transforms-${{ runner.os }}-${{ runner.arch }}-node${{ matrix.node }}-${{ matrix.shard }}of${{ matrix.shards }}-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
+          restore-keys: test-transforms-${{ runner.os }}-${{ runner.arch }}-node${{ matrix.node }}-${{ matrix.shard }}of${{ matrix.shards }}-${{ hashFiles('package-lock.json') }}-
       - if: matrix.shard == 1
         run: npm run typecheck
       - name: Run npm test (shard ${{ matrix.shard }} of ${{ matrix.shards }})
@@ -55,6 +63,11 @@ jobs:
           path: test-timings.xml
           retention-days: 30
           if-no-files-found: ignore
+      - if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: node_modules/.cache
+          key: test-transforms-${{ runner.os }}-${{ runner.arch }}-node${{ matrix.node }}-${{ matrix.shard }}of${{ matrix.shards }}-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
   # pi-extras supports only the latest Pi. The job above tests the Pi in package-lock, which is also the minimum in
   # the README and the peer ranges (a test checks it). This one tests the newest Pi that npm serves now.
   pi-versions:
