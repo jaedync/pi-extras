@@ -116,8 +116,9 @@ test("the Anthropic stall watchdog is on by default, bounded, and 0 disables it"
 test("planWaitBudget each: a plan-window wait has its own budget; other limits keep the run's budget", () => {
 	const each = normalizeConfig({ autoWait: true, planWaitBudget: "each" });
 	assert.equal(each.planWaitBudget, "each");
-	assert.equal(DEFAULT_CONFIG.planWaitBudget, "run");
-	for (const value of [undefined, "each ", "per-wait", 1, true]) assert.equal(normalizeConfig({ planWaitBudget: value }).planWaitBudget, "run", String(value));
+	assert.equal(DEFAULT_CONFIG.planWaitBudget, "each");
+	assert.equal(normalizeConfig({ planWaitBudget: "run" }).planWaitBudget, "run");
+	for (const value of [undefined, "run ", "per-run", 1, true]) assert.equal(normalizeConfig({ planWaitBudget: value }).planWaitBudget, "each", String(value));
 	const codexPlan = { provider: "openai-codex", model: "gpt-6.2-sol", api: "openai-codex-responses" };
 	// Four hours already spent in this run; the next 5h window resets in 3 h.
 	const spent = 4 * 3600_000;
