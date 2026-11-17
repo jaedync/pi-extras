@@ -19,6 +19,12 @@ const SCOPE = scopeSupported();
 const dirs: string[] = [];
 after(() => { for (const dir of dirs) rmSync(dir, { recursive: true, force: true }); });
 
+/**
+ * Waits until the shell has n `sleep` children. A `sleep &` is first a forked bash and only then execs sleep, so a
+ * call that ends at once can name a `bash`. The loop's own command substitution is a bash child, never a sleep.
+ */
+const sleepsStarted = (n: number) => `until [ "$(pgrep -P $$ -x sleep | wc -l)" -ge ${n} ]; do :; done`;
+
 const ops = (mode: TreeMode) => treeShellOperations(() => ({ shell: "/bin/bash", args: ["-c"] }), { graceMs: 300, mode });
 
 type Execute = (id: string, params: { command: string; timeout?: number }, signal?: AbortSignal) => Promise<{ content: { text: string }[] }>;
@@ -43,7 +49,7 @@ for (const { mode, skip } of modes) {
 		test("a background process that the end ended is named, with the way to keep one", { timeout: 15_000 }, async () => {
 			const value = marker();
 			try {
-				const result = await run(mode, `sleep ${value} & echo started`);
+				const result = await run(mode, `sleep ${value} & ${sleepsStarted(1)}; echo started`);
 				assert.equal(result.error, false, result.text);
 				assert.match(result.text, /^started\n/);
 				assert.match(result.text, /Ended 1 background process when the call ended: sleep \(pid \d+\)\./);
@@ -56,7 +62,7 @@ for (const { mode, skip } of modes) {
 		test("at most 5 names, then a count", { timeout: 15_000 }, async () => {
 			const value = marker();
 			try {
-				const result = await run(mode, `for i in 1 2 3 4 5 6 7; do sleep ${value} & done; echo started`);
+				const result = await run(mode, `for i in 1 2 3 4 5 6 7; do sleep ${value} & done; ${sleepsStarted(7)}; echo started`);
 				assert.equal(result.error, false, result.text);
 				assert.match(result.text, /Ended 7 background processes when the call ended: (sleep \(pid \d+\), ){4}sleep \(pid \d+\) and 2 more\./);
 				assert.deepEqual(await survivors(value, 1000), []);
