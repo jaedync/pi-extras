@@ -29,7 +29,7 @@ can still conflict.
 | Status Plus | Usage/cost grid, context and cache indicators, per-provider limits in a fixed order, $0.00 rows for free local providers, optional linked subagent usage |
 | Usage Guard | `usage` tool, `/usage` command, one-shot warnings at a session budget (a warning point, not a stop) or, when enabled, near a limit |
 | Cache Compaction | Prefix-sharing summaries that reuse the session's warm prompt cache, with safe fallback to Pi's default compaction |
-| Rate-limit Recovery | `/rate-limit-recovery`, bounded backoff for short rate limits and connection failures, opt-in main-session hibernation for provider cooldowns; subagents fail fast on quotas with reset guidance |
+| Rate-limit Recovery | `/rate-limit-recovery`, bounded backoff for short rate limits and connection failures, opt-in main-session hibernation for provider cooldowns; subagents fail fast on quotas with reset guidance, and their parent can wait for a ChatGPT plan reset |
 | Phase Spinner | Descriptive status with a per-mode spinner in the editor's top divider, with a per-step stopwatch, alongside tokens/sec, time to first token and total elapsed time; live thinking above queued messages and a π end line when a prompt finishes |
 | Tab Status | Pi's state in the terminal tab: an iTerm2 status dot and detail, and tab progress in iTerm2, Ghostty, WezTerm and Windows Terminal |
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications; jobs are named after their titles |
@@ -300,7 +300,10 @@ that no set and no session uses is removed after 1 hour.
   `transientMaxWaitSeconds` (default `180`, `10` to `900`, `0` leaves short rate
   limits and connection failures to Pi's own retry), `localRetry` (default
   `true`: a local server is waited for with no limit), `localProviders`
-  (default `[]`: provider names that count as local). A number out of range moves to the nearest limit. A
+  (default `[]`: provider names that count as local), `subagentPlanWait`
+  (unset: the same as `autoWait`; `false` turns it off, `true` turns it on: a
+  subagent run that meets a ChatGPT plan limit waits in its parent for the
+  reset, see Subagents). A number out of range moves to the nearest limit. A
   negative number, or a value that is not a number, uses the default. A count
   with a fraction rounds down.
   `/rate-limit-recovery on|off` saves only `autoWait`; commands take precedence
@@ -1254,8 +1257,10 @@ With no fresh reading, no full window, or no reset time, the turn stops as
 before. The error says why. A reset after `maxWaitSeconds`, such as the 7-day
 window, also stops the turn. The error gives the window and its reset time.
 An `openai` API key is not the plan, so it never waits on a plan limit. The
-provider's text is not sent to the model and is not logged. A subagent never
-waits on a plan limit: it fails fast with the reset time when Codex sent one.
+provider's text is not sent to the model and is not logged. A subagent's own
+session never waits on a plan limit: it fails fast with the reset time when
+Codex sent one. Its parent can then hold the run until the reset and resume
+it (`subagentPlanWait`, see Subagents).
 A ChatGPT Business admin limit
 (`subscription_sharing_workplace_individual_usage_limit_exceeded`) is no plan
 window and never waits.
@@ -2923,6 +2928,32 @@ failed: usage limit reached.` A fallback model can cost more than the model
 main chose. The run keeps its budget: the time and cost it used before the
 switch still count. When no model is left, the run fails and its error says
 so. Other failures, such as a full context or a bad request, fail as before.
+
+**ChatGPT plan waits.** A run can meet the ChatGPT plan usage limit
+(`openai-codex`, or Sign in with ChatGPT on `openai`) with no fallback model
+left. Then the parent harness can wait for the reset instead of failing the
+run. The child itself still fails fast. The wait needs all of these:
+
+- `rateLimitRecovery.subagentPlanWait` is on. Unset, it follows `autoWait`.
+- Codex sent an exact reset time (`resets_at`).
+- The reset plus `resumeMarginSeconds` is within `maxWaitSeconds` from now.
+- The run waited fewer than `maxRecoveries` times. With `planWaitBudget`
+  `"run"`, the waits of one run also share `maxWaitSeconds`.
+
+A fallback model goes first: the run waits only when no fallback is left.
+While it waits, the child is `queued` and its row says `waiting for the
+ChatGPT plan reset until 22:10 UTC`. It holds no slot and no session, and
+its time budget does not count. At the reset plus the margin, the same run
+goes on, on the same model, from its session. The child first reads when it
+waited, from when to when in UTC. A later plan limit in that run waits again
+within the same limits. Otherwise the run fails, and its error says why the
+parent did not wait.
+
+A stop, a failure of its parent, a close and a shutdown end the wait. A
+message from main, its parent or the user resumes it at once. A note from a
+peer waits in its inbox. A restart or a `/reload` that closes the team
+leaves the child interrupted, and the restore notice gives the reset time.
+A resume before the reset meets the limit again, and the run waits again.
 
 **Memory.** A child's session is released when it ends. It is released
 immediately when it failed or was stopped. When it finished, it is released
