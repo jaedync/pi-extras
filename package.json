@@ -70,7 +70,7 @@
     "test": "node scripts/test.mjs",
     "typecheck": "tsc -p . && tsc -p skills/walkthrough-video && tsc -p skills/walkthrough-video/templates/film && tsc -p skills/ui-redline && tsc -p skills/untangle-codebase && tsc -p skills/formal-verification && tsc -p skills/code-slop-rules && tsc -p skills/speed-up-ci",
     "lint:slop": "node skills/code-slop-rules/scripts/slop.mjs ratchet",
-    "test:unit": "node --import ./tests/support/keep-alive.mjs --test --test-timeout=60000 tests/*.test.ts tests/*.test.mjs tests/*.test.mts",
+    "test:unit": "node scripts/test-unit.mjs",
     "test:kagi": "vitest run",
     "test:pi": "node scripts/test-pi.mjs",
     "test:install": "node scripts/install-smoke.mjs",
