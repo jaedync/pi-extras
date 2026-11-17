@@ -10,7 +10,9 @@ https://x.com/pontusab/status/2121982070193058191 -->
 
 Make CI as fast as possible without letting it lie. The default target: a PR
 gets its result in under 2 minutes at the median and under 3 minutes at p95.
-The user can set a different target.
+The user can set a different target. Some targets need a bill or a matrix
+change (for example more macOS runners). Then report the lowest time that
+you can reach without them, and give each option with its cost.
 
 `scripts/ci.mjs` (in this skill's folder; Node 22.18 or later, and `gh` for
 the audit) does the measurement and the deterministic parts:
@@ -36,7 +38,8 @@ Run `node <skill>/scripts/ci.mjs <command> --help` for the options.
    yourself. Put each one in a list for the user, with the expected monthly
    cost.
 4. One small PR (or commit) for each change, with before and after numbers
-   from real CI runs, not from local runs.
+   from real CI runs, not from local runs. Until the user approves the
+   pushes, label each "after" number as measured locally or expected.
 5. Get the user's approval before each push, PR, branch deletion or
    repository setting change. The canary in step 3 and the before and after
    runs need pushes, so ask for them together, in one list.
@@ -45,7 +48,8 @@ Run `node <skill>/scripts/ci.mjs <command> --help` for the options.
 
 Copy `scripts/ci.mjs` and its `lib/` folder into the repository (for
 example as `.ci/ci.mjs` and `.ci/lib/`). Then CI does not depend on this
-skill, and the snippets can call `node .ci/ci.mjs`.
+skill, and the snippets can call `node .ci/ci.mjs`. When the repository
+already contains this skill, call the scripts where they are.
 
 ## 1. Audit
 
@@ -59,7 +63,9 @@ node <skill>/scripts/ci.mjs audit --runs 150 --save .ci-audit/before.json
   wait on `needs:` jobs. Setup is the runner start, checkout, toolchain,
   caches and the dependency install. Running is the rest.
 - Cancelled and skipped runs are left out, because `cancel-in-progress`
-  makes many short ones. `--success-only` keeps only successful runs.
+  makes many short ones. Jobs that fail-fast cancelled are left out too.
+- Use `--success-only` for the before and after numbers: a failed run often
+  ends early, so it makes the times look short.
 - The critical path is the job that ended last in each run. The author waits
   for that job. Runner minutes are what the runs cost.
 - If the step names hide setup (for example `make deps`), add
@@ -95,13 +101,23 @@ These are the default budgets. Each item says what usually gets a job there.
   - Shard by measured duration (step 4). Give each shard its own database or
     service.
   - Use more cores before more shards, and set the test concurrency to the
-    core count.
+    core count. If tests depend on timing, measure their failure rate at the
+    new concurrency before you keep it.
+  - Shards multiply with the OS and runtime matrix. GitHub limits the jobs
+    that run at the same time (on the Free plan: 20 jobs, of which 5 are
+    macOS). Jobs above the limit wait, and the wait counts. Give each OS its
+    own shard count.
 - **Shape.** Run lint, typecheck, build and tests as parallel jobs, not as
   steps of one job. Then move slow side checks (migrations, other apps'
   tests, the install smoke test) out of the slowest job into their own jobs.
+  A tool cache inside the dependency folder (for example
+  `node_modules/.cache`) must be restored after the install step, because
+  `npm ci` empties that folder.
 - **Local, under 9 s.** Add a pre-push hook that runs format, lint and
   typecheck on the changed files. Use a hook, not a line in `AGENTS.md`,
-  because agents skip steps.
+  because agents skip steps. Use the repository's own fastest commands. If
+  one of them alone is over the budget (a full typecheck), leave it to CI
+  and say so.
 - **Keep it fast.** Set `timeout-minutes` on every job near its budget, so a
   slow job fails instead of slowly getting slower. Run the audit again after
   each change.
@@ -133,6 +149,10 @@ These are the default budgets. Each item says what usually gets a job there.
 
 The merge queue and the main branch always run the full suite (rule 1).
 
+If the test runner has no import-graph selector (for example `node:test` or
+plain scripts), do not write one. Skip this step, say so in the report, and
+get the gain from shards and caches.
+
 ## 4. Shard by recorded time
 
 Equal file counts give unequal shards. Record the time of each test file on
@@ -150,7 +170,9 @@ node .ci/ci.mjs shards --timings .ci/timings.json --files test-files.txt --count
 
 - Get the file list from the test runner, not from a `git ls-files`
   pattern. A pattern that differs from the runner's include list leaves
-  files out of every shard.
+  files out of every shard. A runner with no list mode (`node:test`) needs
+  one shared list module that the full run and the shards both use, and a
+  test that compares that list with the files on disk.
 - Compute the plan once for each run, and give each shard its list (the
   `plan` job in `references/github-actions.md`). Shards that restore the
   timings by themselves can get different files, and then a test file runs
@@ -159,7 +181,8 @@ node .ci/ci.mjs shards --timings .ci/timings.json --files test-files.txt --count
   as a substring, so `a.test.ts` also runs `a.test.tsx`.
 - `timings` reads JUnit XML (Vitest; Jest with `jest-junit` and
   `addFileAttribute: true`; pytest with `-o junit_family=xunit1`) and Vitest
-  or Jest JSON reports. Use `--prefix <path>/` only when the file list has
+  or Jest JSON reports. Node's own JUnit reporter cannot time a file: use
+  `scripts/node-test-timings-reporter.mjs` as an extra `--test-reporter`. Use `--prefix <path>/` only when the file list has
   repository paths and the runner names files relative to a package.
 - A new file gets the median time. Missing timings give an even split by
   count, with a warning when no listed file matches the timings.

@@ -50,6 +50,10 @@ Put every input that changes the installed folder in the key: the OS, the
 architecture, the runtime version, the lockfile, the package manager config
 and any patches.
 
+A tool cache inside `node_modules` (for example `node_modules/.cache`) needs
+its own `actions/cache` step after the install, because `npm ci` deletes
+`node_modules` first.
+
 ## Merge queue: the full suite before main
 
 ```yaml
@@ -190,6 +194,24 @@ test:
   each Vitest root.
 - Job outputs have a size limit (1 MB for each job). For a very large file
   list, upload the plan as an artifact and download it in each shard.
+
+## A different shard count for each OS
+
+```yaml
+strategy:
+  matrix:
+    os: [ubuntu-latest, macos-latest]
+    shard: [1, 2, 3, 4]
+    exclude:
+      - { os: macos-latest, shard: 3 }
+      - { os: macos-latest, shard: 4 }
+    include:
+      - { os: ubuntu-latest, shards: 4 }
+      - { os: macos-latest, shards: 2 }
+```
+
+Add a test that reads the workflow and checks that each OS lists shards 1
+to `shards`. A wrong count leaves files on no shard.
 
 ## Record the timings on main
 

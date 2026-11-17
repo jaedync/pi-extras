@@ -1,4 +1,5 @@
 import { realpathSync } from "node:fs";
+import { byCodePoint } from "./stats.mjs";
 import { dirname, basename, isAbsolute, join, relative, sep } from "node:path";
 
 const TEST_FILE = /\.(m?[jt]sx?|c[jt]s|py|rb|go|rs|java|kt|php|ex|exs)$/;
@@ -99,7 +100,7 @@ export function mergeTimings(maps) {
 	/** @type {Map<string, number>} */
 	const merged = new Map();
 	for (const map of maps) for (const [file, value] of map) merged.set(file, Math.max(merged.get(file) ?? 0, value));
-	return Object.fromEntries([...merged].sort(([a], [b]) => a.localeCompare(b)).map(([file, value]) => [file, Math.round(value * 1000) / 1000]));
+	return Object.fromEntries([...merged].sort(([a], [b]) => byCodePoint(a, b)).map(([file, value]) => [file, Math.round(value * 1000) / 1000]));
 }
 
 /**

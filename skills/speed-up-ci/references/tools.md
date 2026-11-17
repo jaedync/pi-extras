@@ -14,6 +14,7 @@ is faster on this repository.
 | Format | `oxfmt` (or Biome) | Run in check mode in CI. |
 | Install and scripts | `bun install` | Measure it against the current package manager with a warm and a cold cache. |
 | Tests | Vitest | `isolate: false` when the files reset their state; `sequence.shuffle` to find leaks. |
+| Tests (node:test) | `node --test` with a shared file list module | No import-graph selection. For timings, add `--test-reporter=<skill>/scripts/node-test-timings-reporter.mjs --test-reporter-destination=timings.xml`. |
 | Selection | `vitest --changed <base>`, `jest --changedSince <base>`, `nx affected`, `turbo run test --affected` | Always together with `ci.mjs select`. |
 
 ## Python

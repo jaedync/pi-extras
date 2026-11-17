@@ -142,6 +142,35 @@ test("shards are packed longest first onto the lightest shard, and new files get
 	assert.deepEqual(planShards(["z", "y"], {}, 3).map((shard) => shard.files), [["y"], ["z"], []]);
 });
 
+test("ties break by code point, not by the runner's locale, so every runner computes the same plan", () => {
+	const plan = planShards(["a.test.ts", "B.test.ts"], {}, 2);
+	assert.deepEqual(plan.map((shard) => shard.files), [["B.test.ts"], ["a.test.ts"]]);
+	assert.deepEqual(Object.keys(mergeTimings([new Map([["a", 1], ["B", 1]])])), ["B", "a"]);
+});
+
+test("a job that fail-fast cancelled stays out of the job and step times", () => {
+	const run = { id: 1, event: "push", created_at: t(0), run_started_at: t(0), conclusion: "failure" };
+	const summary = summarize([{ run, jobs: [
+		{ ...job("test (macos)", 0, 1, 300, [step("Run npm test", 1, 300)]), conclusion: "failure" },
+		{ ...job("test (ubuntu)", 0, 1, 20, [step("Run npm test", 1, 20)]), conclusion: "cancelled" },
+	] }]);
+	assert.deepEqual(summary.jobs.map((entry) => entry.name), ["test (macos)"]);
+	assert.ok(summary.steps.every((entry) => entry.job === "test (macos)"));
+});
+
+test("the node:test timings reporter writes one suite per file that ci.mjs timings reads", () => {
+	const dir = temp();
+	writeFileSync(join(dir, "one.test.mjs"), "import { test } from 'node:test'; test('x', () => {});\n");
+	const reporter = join(ROOT, "skills", "speed-up-ci", "scripts", "node-test-timings-reporter.mjs");
+	// A node --test child of a test run reports to its parent unless it loses the parent's test context.
+	const { NODE_TEST_CONTEXT: _parent, ...nested } = process.env;
+	let result = spawnSync(process.execPath, ["--test", "--test-reporter", reporter, "--test-reporter-destination", "report.xml", "one.test.mjs"], { cwd: dir, encoding: "utf8", env: nested });
+	assert.equal(result.status, 0, result.stderr);
+	result = ci(dir, "timings", "report.xml");
+	assert.equal(result.status, 0, result.stderr);
+	assert.deepEqual(Object.keys(JSON.parse(result.stdout).files), ["one.test.mjs"]);
+});
+
 test("the shard plan does not depend on the input order", () => {
 	const timings = { a: 5, b: 5, c: 5, d: 1 };
 	const one = planShards(["a", "b", "c", "d"], timings, 3);

@@ -11,6 +11,21 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   On macOS the temp folder `/var` is a link to `/private/var`, so the skill's
   own test failed there. Paths outside the root are now compared again with
   both sides resolved.
+- Speed Up CI: shard plans and timings sort by code point, not by the
+  runner's locale, so runners with different locales compute the same plan.
+- Speed Up CI: `ci.mjs audit` leaves out jobs that fail-fast cancelled,
+  because their times are too short.
+
+### Changed
+
+- Speed Up CI, from its first real use on this repository:
+  - New `scripts/node-test-timings-reporter.mjs` times each `node:test` file.
+    Node's own JUnit reporter cannot.
+  - The skill covers runners with no import-graph selector, GitHub's limits
+    on jobs at the same time (5 macOS jobs on the Free plan), a shard count
+    for each OS, tool caches inside `node_modules`, a target that needs a
+    bill, and "after" numbers before the pushes are approved.
+  - `ci.mjs audit` keeps the commit SHA of each run.
 
 ## 0.47.1 - 2026-11-17
 

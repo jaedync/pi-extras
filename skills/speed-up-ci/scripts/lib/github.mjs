@@ -76,6 +76,6 @@ function pickJob(job) {
 
 /** Keep the fields the audit reads, so a saved file stays small and holds no commit text. @param {any} run */
 function pick(run) {
-	const { id, name, event, head_branch, conclusion, run_attempt, created_at, run_started_at, updated_at } = run;
-	return { id, name, event, head_branch, conclusion, run_attempt, created_at, run_started_at, updated_at };
+	const { id, name, event, head_branch, head_sha, conclusion, run_attempt, created_at, run_started_at, updated_at } = run;
+	return { id, name, event, head_branch, head_sha, conclusion, run_attempt, created_at, run_started_at, updated_at };
 }

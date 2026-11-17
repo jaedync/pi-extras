@@ -1,4 +1,4 @@
-import { p50p95 } from "./stats.mjs";
+import { byCodePoint, p50p95 } from "./stats.mjs";
 
 /**
  * Step names that are setup, not the check itself: the runner start, checkout, toolchain and cache actions, dependency
@@ -87,6 +87,8 @@ export function summarize(all, setup = DEFAULT_SETUP, { successOnly = false } = 
 			walls.get(run.event).push(wall);
 		}
 		for (const job of jobs) {
+			// fail-fast cancels the other jobs of a failed run part way, so their times are too short.
+			if (job.conclusion === "cancelled") continue;
 			const buckets = jobBuckets(job, setup);
 			if (!buckets) continue;
 			if (!byJob.has(job.name)) byJob.set(job.name, { waiting: [], setup: [], running: [], total: [] });
@@ -109,10 +111,10 @@ export function summarize(all, setup = DEFAULT_SETUP, { successOnly = false } = 
 	const jobs = [...byJob].map(([name, entry]) => ({
 		name, n: entry.total.length,
 		waiting: p50p95(entry.waiting), setup: p50p95(entry.setup), running: p50p95(entry.running), total: p50p95(entry.total),
-	})).sort((a, b) => (b.total.p50 ?? 0) - (a.total.p50 ?? 0) || a.name.localeCompare(b.name));
+	})).sort((a, b) => (b.total.p50 ?? 0) - (a.total.p50 ?? 0) || byCodePoint(a.name, b.name));
 	const steps = [...bySteps.values()]
 		.map(({ job, step, values }) => ({ job, step, n: values.length, bucket: classifyStep(step, setup), ...p50p95(values) }))
-		.sort((a, b) => b.p50 - a.p50 || a.job.localeCompare(b.job) || a.step.localeCompare(b.step))
+		.sort((a, b) => b.p50 - a.p50 || byCodePoint(a.job, b.job) || byCodePoint(a.step, b.step))
 		.slice(0, STEP_ROWS);
 	return {
 		runs: runs.length, conclusions,

@@ -1,3 +1,8 @@
+/** Code-point order: the same on every runner, unlike localeCompare, which depends on the locale. */
+export function byCodePoint(a, b) {
+	return a < b ? -1 : a > b ? 1 : 0;
+}
+
 /**
  * Nearest-rank percentile: the smallest value with at least p percent of the values at or below it.
  * Nearest rank returns a real observed duration, which a reader can find in the run list.
