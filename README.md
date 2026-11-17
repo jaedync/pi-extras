@@ -2950,8 +2950,9 @@ within the same limits. Otherwise the run fails, and its error says why the
 parent did not wait.
 
 A stop, a failure of its parent, a close and a shutdown end the wait. A
-message from main, its parent or the user resumes it at once. A note from a
-peer waits in its inbox. A restart or a `/reload` that closes the team
+message from main, its parent or the user resumes it at once. Other mail,
+such as a note from a peer or a report from its own subagent, waits in its
+inbox for the resumed run. A restart or a `/reload` that closes the team
 leaves the child interrupted, and the restore notice gives the reset time.
 A resume before the reset meets the limit again, and the run waits again.
 

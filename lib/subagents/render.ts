@@ -122,7 +122,7 @@ const agentOf = (context: RowContext): string | undefined => (context?.state as 
 function joinStatus(record: AgentRecord, now: number): Seg[] {
 	const took = record.startedAt === undefined ? [] : [SEP, timeSeg((record.endedAt ?? now) - record.startedAt)];
 	switch (record.state) {
-		case "queued": return [{ text: "queued", color: "dim" }];
+		case "queued": return [{ text: record.planWait?.pausedAt !== undefined && record.activity ? record.activity : "queued", color: "dim" }];
 		case "starting": case "running": return [{ text: "working", color: "muted" }];
 		case "asking": return [{ text: record.activity ?? "asking", color: "warning" }];
 		case "waiting": return [{ text: record.activity ?? "waiting on its subagents", color: "muted" }];

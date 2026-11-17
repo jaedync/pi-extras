@@ -32,6 +32,8 @@ export function shortTime(ms: number): string {
 function doing(record: AgentRecord, get: Lookup): string {
 	switch (record.state) {
 		case "queued": {
+			// A run that waits for a ChatGPT plan reset says until when (plan-wait.ts).
+			if (record.planWait?.pausedAt !== undefined && record.activity) return record.activity;
 			const waits = waitingFor(record, get);
 			return waits.length > 0 ? `queued after ${waits.join(", ")}` : "queued";
 		}

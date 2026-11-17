@@ -222,11 +222,11 @@ export class Routing {
 			host.patch(to, { unread: [...(host.get(to)?.unread ?? []), body] });
 			return { ok: true, delivered: "steered" };
 		}
-		return this.wake(target, { from, body, said, automatic, peer }, { resumes, ended });
+		return this.wake(target, { from, body, said, automatic, peer }, { resumes, ended, above });
 	}
 
 	/** A message to a child that does not run now: it resumes it, or waits in its inbox. */
-	private wake(target: AgentRecord, why: Omit<Resume, "stale">, how: { resumes: boolean; ended: boolean }): SendResult {
+	private wake(target: AgentRecord, why: Omit<Resume, "stale">, how: { resumes: boolean; ended: boolean; above: boolean }): SendResult {
 		const { host } = this;
 		const { name: to } = target;
 		const handle = host.sessions.get(to);
@@ -251,9 +251,10 @@ export class Routing {
 			return { ok: true, delivered: "resumed" };
 		}
 		host.patch(to, { inbox: [...(host.get(to)?.inbox ?? []), why.body] });
-		// A run that waits for a plan reset goes on now: one who may resume it asked it to (plan-wait.ts). The message is in its inbox for that launch.
+		// A run that waits for a plan reset goes on now when main, its parent or the user asks (plan-wait.ts); the message is in its inbox for
+		// that launch. Others' mail, its subagents' reports included, waits there: each early resume can meet the limit again and use a wait.
 		if (host.planWaiting?.(to)) {
-			if (!resumes) return { ok: true, delivered: "inbox" };
+			if (!how.above) return { ok: true, delivered: "inbox" };
 			host.endPlanWait?.(to);
 			return { ok: true, delivered: "resumed" };
 		}

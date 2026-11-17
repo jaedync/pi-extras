@@ -14,6 +14,7 @@ import { DEFAULT_CONFIG, normalizeConfig, type RecoveryConfig, SUBAGENT_PLAN_WAI
 import { ChildIndex } from "../lib/subagents/restore.ts";
 import { recoveryDecision } from "../lib/subagents/recovery.ts";
 import { createChildRateLimitGuard } from "../lib/rate-limit-recovery/child.ts";
+import { agentStatus } from "../lib/subagents/status.ts";
 import { teamHarness } from "./support/team-harness.ts";
 import "./support/plan-login.ts";
 
@@ -66,6 +67,7 @@ test("a run that meets a plan limit waits for the reset and goes on as the same 
 	assert.equal(record.state, "queued", "it holds no slot while it waits");
 	assert.equal(record.error, undefined, "the run did not fail");
 	assert.equal(record.activity, "waiting for the ChatGPT plan reset until 22:10 UTC");
+	assert.equal(agentStatus(record, (other) => h.team.get(other), clock.now), `${name} waiting for the ChatGPT plan reset until 22:10 UTC`, "the Team now: line");
 	assert.deepEqual(record.planWait, { run: 1, waits: 1, waitedMs: 0, pausedAt: START + 10 * MIN, resetAt: reset, resumeAt: reset + 10_000, window: "5h" });
 	assert.deepEqual(timer.delays, [2 * HOUR + 10_000], "the timer ends at the reset plus the margin");
 	assert.equal(h.launched.length, 1);
@@ -258,6 +260,27 @@ test("a message from main or the parent during the wait resumes the run at once;
 	assert.match(text, /from 2026-11-17T20:00:00\.000Z to 2026-11-17T20:30:00\.000Z \(UTC\)\. That is [^.]+\. A message resumed you before the expected reset at 2026-11-17T22:00:00\.000Z, so the plan can still be limited\./);
 	assert.match(text, /FYI: the parser moved\./);
 	assert.match(text, /Go on now\./);
+	await h.team.close();
+});
+
+test("a report from its own subagent does not end the wait: it waits in the inbox for the resumed run", async () => {
+	const { h, clock, timer, planFail } = setup();
+	const lead = h.spawn("Lead", { model: SOL });
+	await tick();
+	const helper = h.spawn("Helper", { model: OPUS, parent: lead });
+	await tick();
+	planFail(lead, clock.now + HOUR);
+	await settle();
+	h.lastCall(helper).finish("Helper result.");
+	await settle();
+	assert.equal(h.team.get(lead)!.state, "queued");
+	assert.equal(timer.pending.size, 1);
+	assert.match((h.team.get(lead)!.inbox ?? []).join("\n"), /Helper result\./);
+	clock.now += HOUR + 10_000;
+	timer.fire();
+	await settle();
+	assert.equal(h.team.get(lead)!.state, "running");
+	assert.match(h.lastCall(lead).text, /The expected reset time has passed\.[\s\S]*Helper result\./);
 	await h.team.close();
 });
 
