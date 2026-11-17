@@ -184,8 +184,8 @@ async function bounded<T>(work: Promise<T>, cancel: () => Promise<void>): Promis
 async function mainSession(baseUrl: string, autoWait: boolean, retry: RetrySettings = retrySettings, fixture: NativeFixture = anthropic, options: RuntimeOptions = {}) {
 	const agentDir = mkdtempSync(join(scratch, "main-"));
 	const configFile = join(agentDir, "pi-extras.json");
-	// An empty config proves default-off rather than an explicit false override.
-	writeFileSync(configFile, JSON.stringify(autoWait ? { rateLimitRecovery: { autoWait: true } } : {}));
+	// Explicit either way: waiting is on by default, and these cases test both states.
+	writeFileSync(configFile, JSON.stringify({ rateLimitRecovery: { autoWait } }));
 	const { runtime, model, assertWrapped, assertRestored, expectConfig } = await nativeRuntime(baseUrl, fixture, options);
 	const settingsManager = sdk.SettingsManager.inMemory({ compaction: { enabled: false }, cacheWarming: "off", transport: "sse", retry });
 	assert.equal(settingsManager.getProviderRetrySettings().maxRetries, retry.provider?.maxRetries, "retain the requested native retry settings");
@@ -266,7 +266,7 @@ for (const retry of [retrySettings, configuredRetry]) test(`native HTTP 429 reco
 	assert.ok(!f.session.messages.some((message: any) => message.role === "assistant" && message.stopReason === "error"), "failed assistant omitted from projected retry context");
 });
 
-for (const fixture of [anthropic, codex]) for (const retry of [retrySettings, configuredRetry]) test(`default-off TUI main stops after one native ${fixture.provider} HTTP quota rejection (provider retries ${retry.provider?.maxRetries ?? "default"})`, { timeout: 10_000 }, async (t) => {
+for (const fixture of [anthropic, codex]) for (const retry of [retrySettings, configuredRetry]) test(`autoWait-off TUI main stops after one native ${fixture.provider} HTTP quota rejection (provider retries ${retry.provider?.maxRetries ?? "default"})`, { timeout: 10_000 }, async (t) => {
 	const http = await endpoint(fixture === codex ? { retryAfter: "0.1" } : retry.provider ? { retryAfter: "0.2" } : {}, fixture);
 	t.after(() => http.close());
 	const f = await mainSession(http.baseUrl, false, retry, fixture);

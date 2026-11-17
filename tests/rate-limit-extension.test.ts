@@ -192,8 +192,19 @@ test("transport protection setup failure aborts with guidance and never schedule
 	} finally { f.close(); }
 });
 
-test("detection defaults to fail-fast without any wait or continuation", async () => {
+test("with no setting, an interactive main session waits and continues once", async () => {
 	const f = fixture({});
+	try {
+		await f.detect();
+		const result = await f.turn();
+		assert.ok(result?.entries.some((entry: any) => entry.type === "custom_message"), "the resume note");
+		assert.equal(f.waited, 1);
+		assert.deepEqual(await f.emit("agent_before_settle", { context: { canContinue: true } }), { continue: true });
+	} finally { f.close(); }
+});
+
+test("with autoWait false, detection fails fast without any wait or continuation", async () => {
+	const f = fixture({ autoWait: false });
 	try {
 		const replacement = await f.detect();
 		assert.equal(replacement.message.stopReason, "error");

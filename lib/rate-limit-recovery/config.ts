@@ -43,7 +43,7 @@ export function subagentPlanWaitOn(config: RecoveryConfig): boolean {
 
 export const SECTION = "rateLimitRecovery";
 export const DEFAULT_CONFIG: RecoveryConfig = Object.freeze({
-	autoWait: false, resumeMarginSeconds: 10, maxWaitSeconds: 18_000, planWaitBudget: "each", maxRecoveries: 10,
+	autoWait: true, resumeMarginSeconds: 10, maxWaitSeconds: 18_000, planWaitBudget: "each", maxRecoveries: 10,
 	anthropicFirstEventSeconds: DEFAULT_FIRST_EVENT_SECONDS,
 	transientMaxWaitSeconds: 180,
 	localRetry: true, localProviders: Object.freeze([]) as readonly string[],
@@ -77,7 +77,7 @@ function optional(value: unknown, fallback: number, min: number, max: number): n
 export function normalizeConfig(raw: unknown): RecoveryConfig {
 	const r = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
 	return {
-		autoWait: r.autoWait === true,
+		autoWait: r.autoWait !== false,
 		resumeMarginSeconds: bounded(r.resumeMarginSeconds, DEFAULT_CONFIG.resumeMarginSeconds, 0, MAX_MARGIN_SECONDS),
 		maxWaitSeconds: bounded(r.maxWaitSeconds, DEFAULT_CONFIG.maxWaitSeconds, 0, MAX_WAIT_SECONDS),
 		planWaitBudget: r.planWaitBudget === "run" ? "run" : "each",

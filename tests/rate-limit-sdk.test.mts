@@ -184,7 +184,7 @@ test("completed side effects are not replayed, and incomplete quota tool calls n
 	} finally { await f.close(); }
 });
 
-test("default-off detection stops fast instead of repeating known quota failures", { timeout: 10_000 }, async () => {
+test("autoWait-off detection stops fast instead of repeating known quota failures", { timeout: 10_000 }, async () => {
 	const f = await setup({ autoWait: false });
 	try {
 		f.faux.setResponses([rejected(), ai.fauxAssistantMessage("Must not run.")]);

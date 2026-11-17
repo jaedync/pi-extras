@@ -29,7 +29,7 @@ can still conflict.
 | Status Plus | Usage/cost grid, context and cache indicators, per-provider limits in a fixed order, $0.00 rows for free local providers, optional linked subagent usage |
 | Usage Guard | `usage` tool, `/usage` command, one-shot warnings at a session budget (a warning point, not a stop) or, when enabled, near a limit |
 | Cache Compaction | Prefix-sharing summaries that reuse the session's warm prompt cache, with safe fallback to Pi's default compaction |
-| Rate-limit Recovery | `/rate-limit-recovery`, bounded backoff for short rate limits and connection failures, opt-in main-session hibernation for provider cooldowns; subagents fail fast on quotas with reset guidance, and their parent can wait for a ChatGPT plan reset |
+| Rate-limit Recovery | `/rate-limit-recovery`, bounded backoff for short rate limits and connection failures, main-session hibernation for provider cooldowns (on by default); subagents fail fast on quotas with reset guidance, and their parent can wait for a ChatGPT plan reset |
 | Phase Spinner | Descriptive status with a per-mode spinner in the editor's top divider, with a per-step stopwatch, alongside tokens/sec, time to first token and total elapsed time; live thinking above queued messages and a π end line when a prompt finishes |
 | Tab Status | Pi's state in the terminal tab: an iTerm2 status dot and detail, and tab progress in iTerm2, Ghostty, WezTerm and Windows Terminal |
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications; jobs are named after their titles |
@@ -288,7 +288,7 @@ that no set and no session uses is removed after 1 hour.
   (default `[90, 95]`), `resumeMarginSeconds` (default `180`), `proximityPct`
   (default `10`), `maxWaitSeconds` (default `18000`, five hours).
 - `PI_RATE_LIMIT_RECOVERY=on|off`: override automatic quota waiting for one run.
-  `rateLimitRecovery` in `pi-extras.json`: `autoWait` (default `false`),
+  `rateLimitRecovery` in `pi-extras.json`: `autoWait` (default `true`; only `false` turns it off),
   `resumeMarginSeconds` (default `10`, `0` to `3600`), `maxWaitSeconds` (default
   and hard maximum `18000`, five hours total per user-started run),
   `planWaitBudget` (default `"each"`: each ChatGPT plan-window wait gets its
@@ -1227,9 +1227,11 @@ Settings, in `~/.pi/agent/pi-extras.json`:
 
 Usage Guard helps the agent checkpoint before a quota runs out. Rate-limit
 Recovery handles the actual rejection without asking an unavailable model to
-schedule a sleep. Detection is always on; `/rate-limit-recovery on` opts an
-interactive main session into automatic waiting. `/rate-limit-recovery status`
-shows the policy, `off` disables it, and `cancel` stops an active wait.
+schedule a sleep. Detection is always on, and an interactive main session
+waits automatically by default. `/rate-limit-recovery off` turns the waiting
+off (it saves `autoWait: false`), and `on` turns it on again.
+`/rate-limit-recovery status` shows the policy, and `cancel` stops an active
+wait.
 
 A structured `rate_limit_error` or `rate_limit_exceeded` with a numeric
 `retry_after` in seconds supplies the reset estimate. The extension waits that

@@ -85,8 +85,12 @@ test("the resume notice reports measured elapsed time and both unambiguous times
 	assert.match(content, /newer user instructions/i);
 });
 
-test("configuration is opt-in and bounded, with defensive immutable defaults", () => {
-	assert.equal(normalizeConfig({}).autoWait, false);
+test("configuration waits by default, is bounded, with defensive immutable defaults", () => {
+	// On by default (owner answer 1064); only an explicit false turns it off.
+	assert.equal(normalizeConfig({}).autoWait, true);
+	assert.equal(DEFAULT_CONFIG.autoWait, true);
+	assert.equal(normalizeConfig({ autoWait: false }).autoWait, false);
+	for (const value of ["false", 0, null]) assert.equal(normalizeConfig({ autoWait: value }).autoWait, true, String(value));
 	assert.deepEqual(normalizeConfig({ autoWait: true, resumeMarginSeconds: 0 }), { ...DEFAULT_CONFIG, autoWait: true, resumeMarginSeconds: 0 });
 	// Values that are not a number of seconds, or are negative, use the default.
 	assert.deepEqual(normalizeConfig({ maxWaitSeconds: -1, maxRecoveries: Infinity, resumeMarginSeconds: "10" }), DEFAULT_CONFIG);
