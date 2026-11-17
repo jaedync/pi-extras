@@ -2,6 +2,21 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Added
+
+- Speed Up CI skill (`skills/speed-up-ci`): the model makes a repository's
+  CI fast without letting it lie. `ci.mjs audit` pulls the last runs with
+  `gh` and splits each job into waiting, setup and running at p50 and p95,
+  with the critical path and the slowest steps. `ci.mjs timings` and
+  `ci.mjs shards` pack test files onto shards by recorded seconds, and
+  `--matrix` gives one plan for all shards of a run. `ci.mjs select` makes a
+  PR run the full suite when the diff touches an input that no import
+  reaches, deletes a file, has a path that git quotes, or cannot be
+  computed. The GitHub Actions reference adds a gate job, so a failed plan
+  cannot pass as a skipped required check. Run `/skill:speed-up-ci`.
+
 ## 0.46.0 - 2026-11-17
 
 ### Changed
