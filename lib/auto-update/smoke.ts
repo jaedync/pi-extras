@@ -19,6 +19,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { firstLine, killGroup, sanitize, trackChild } from "./run.ts";
+import { SMOKE_MARKER_VAR, stopMarked } from "./stragglers.ts";
 
 export const SMOKE_TIMEOUT_MS = 90_000;
 const PROVIDER = "pi-extras-smoke";
@@ -109,6 +110,7 @@ interface Drive {
 	readonly home: string;
 	readonly agentDir: string;
 	readonly reply: string;
+	readonly marker: string;
 	readonly timeoutMs: number;
 }
 
@@ -127,6 +129,8 @@ function drivePi(drive: Drive): Promise<SmokeResult> {
 			PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", PI_TELEMETRY: "0",
 			// The candidate pi-extras loads too; it must not start an update cycle from inside the smoke test.
 			PI_EXTRAS_UPDATE_SMOKE: "1", PI_EXTRAS_UPDATE_STORE: join(drive.home, "store"),
+			// Children inherit it, so the servers that extensions start outside Pi's group can be found and stopped.
+			[SMOKE_MARKER_VAR]: drive.marker,
 		},
 		stdio: ["pipe", "pipe", "pipe"],
 		// Its own process group: a stop reaches the servers and tools that its extensions start, too.
@@ -238,6 +242,7 @@ export function sweepSmokeDirs(dir: string, now: number, maxAgeMs: number): stri
 export async function smokeTest(input: SmokeInput): Promise<SmokeResult> {
 	const root = mkdtempSync(join(tmpdir(), SMOKE_DIR_PREFIX));
 	const reply = `smoke-${randomBytes(6).toString("hex")}`;
+	const marker = randomBytes(12).toString("hex");
 	let fake: { server: Server; port: number } | undefined;
 	try {
 		const home = join(root, "home");
@@ -257,8 +262,12 @@ export async function smokeTest(input: SmokeInput): Promise<SmokeResult> {
 		} catch {
 			return { ok: false, reason: "the candidate Pi has no bin/pi" };
 		}
-		return await drivePi({ bin, node: input.node ?? process.execPath, home, agentDir, reply, timeoutMs: input.timeoutMs ?? SMOKE_TIMEOUT_MS });
+		return await drivePi({ bin, node: input.node ?? process.execPath, home, agentDir, reply, marker, timeoutMs: input.timeoutMs ?? SMOKE_TIMEOUT_MS });
 	} finally {
+		// A server that an extension started in its own session (the pi-intercom broker) would outlive its home.
+		// The scan must not change the verdict, so a failure of it is only a warning.
+		await stopMarked(marker, KILL_GRACE_MS).catch((error: unknown) =>
+			process.emitWarning(`pi-extras smoke test: could not stop the processes it left: ${error instanceof Error ? error.message : String(error)}`));
 		fake?.server.closeAllConnections();
 		fake?.server.close();
 		rmSync(root, { recursive: true, force: true });

@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Fixed
+
+- Auto-update: a server that an extension of the smoke test Pi started in
+  its own session (the pi-intercom broker) outlived the test, one process
+  for each update, with its home deleted. The smoke Pi now gets a unique
+  marker in its environment, and the test stops each process that has the
+  marker when it ends.
+
 ## 0.47.2 - 2026-11-17
 
 ### Fixed

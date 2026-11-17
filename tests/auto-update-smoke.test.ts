@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { SMOKE_DIR_PREFIX, SMOKE_RESERVE_MS, SMOKE_TIMEOUT_MS, smokeTest, sweepSmokeDirs } from "../lib/auto-update/smoke.ts";
+import { signal } from "../lib/process-tree.ts";
 import { fixturePackage, piPrefix, removeTree } from "./support/auto-update-fixtures.ts";
 import { TEST_TRANSFORM_CACHE } from "./support/transform-cache.mjs";
 
@@ -57,6 +58,28 @@ test("a Pi that cannot start gives no verdict; a Pi that fails gives one", async
 	const exits = await smokeTest({ piDir: join(dir, "pi"), packages: [], timeoutMs: 5_000 });
 	assert.match(exits.ok ? "" : exits.reason, /Pi exited \(3\)/);
 	assert.equal(!exits.ok && exits.inconclusive, undefined, "an exit is a verdict");
+});
+
+test("a server that an extension starts in its own session (like the pi-intercom broker) ends with the smoke test", { skip: process.platform === "win32" }, async (t) => {
+	const dir = scratch(t);
+	const pidFile = join(dir, "server.pid");
+	mkdirSync(join(dir, "pi", "bin"), { recursive: true });
+	// setsid-like: detached gives the server its own process group, so a stop of Pi's group does not reach it.
+	writeFileSync(join(dir, "pi", "bin", "pi"), [
+		'const { spawn } = require("node:child_process");',
+		'const server = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });',
+		`require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(server.pid));`,
+		"server.unref();",
+		"process.exit(3);",
+	].join("\n"));
+	writeFileSync(join(dir, "pi", "package.json"), JSON.stringify({ type: "commonjs" }));
+	const result = await smokeTest({ piDir: join(dir, "pi"), packages: [], timeoutMs: 5_000 });
+	assert.match(result.ok ? "" : result.reason, /Pi exited \(3\)/);
+	const pid = Number(readFileSync(pidFile, "utf8"));
+	const alive = () => signal(pid, 0);
+	t.after(() => { if (alive()) process.kill(pid, "SIGKILL"); });
+	for (let i = 0; i < 50 && alive(); i++) await new Promise((done) => setTimeout(done, 100));
+	assert.equal(alive(), false, "the server outlived the smoke test");
 });
 
 test("records after the verdict send nothing more: a reply in the same chunk does not write to a closed stdin", async (t) => {
