@@ -3,6 +3,7 @@ import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-
 import { parseRateLimit } from "./core.ts";
 import { guardFirstEvent, type FirstEventPolicy } from "./first-event.ts";
 import { parseRetryAfter, recordRetryHint } from "./retry-hint.ts";
+import { planHintOf, recordPlanHint, sanitizedPlanError, type PlanHint } from "./plan-limit.ts";
 
 const MAX_BODY_BYTES = 32 * 1024;
 const INSPECTION_MS = 500;
@@ -97,29 +98,50 @@ async function inspect(response: Response, signal: AbortSignal | null | undefine
 		cancelReader(reader, warn); reader.releaseLock();
 	}
 }
-function jsonQuota(text: string | undefined): ReturnType<typeof parseRateLimit> {
+type Quota = { readonly kind: "rate"; readonly limit: NonNullable<ReturnType<typeof parseRateLimit>> } | { readonly kind: "plan"; readonly hint: PlanHint };
+function jsonQuota(text: string | undefined): Quota | undefined {
 	if (text === undefined) return undefined;
 	let parsed: unknown;
 	try { parsed = JSON.parse(text); } catch { return undefined; }
 	// The history parser intentionally accepts prose-wrapped JSON. HTTP bodies must be JSON objects.
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-	return parseRateLimit(text);
+	const limit = parseRateLimit(text);
+	if (limit) return { kind: "rate", limit };
+	const hint = planHintOf(parsed, Date.now());
+	return hint ? { kind: "plan", hint } : undefined;
 }
-function guardedOptions<T extends Pick<StreamOptions, "fetch" | "signal">>(api: string, options: T | undefined, warn: Warning, firstEvent: FirstEventSource): T | undefined {
+/**
+ * Codex sends a WebSocket usage limit as an `error` event that wraps the HTTP
+ * body, and Pi's error keeps only its prose. Record the structure for the run.
+ */
+function planEvents<T extends Pick<StreamOptions, "onProviderStreamEvent" | "signal">>(options: T | undefined): Pick<StreamOptions, "onProviderStreamEvent"> {
+	const next = options?.onProviderStreamEvent;
+	return { onProviderStreamEvent: (event: unknown, model: Parameters<NonNullable<StreamOptions["onProviderStreamEvent"]>>[1]) => {
+		if (event && typeof event === "object" && (event as { type?: unknown }).type === "error") {
+			const hint = planHintOf(event, Date.now());
+			if (hint) recordPlanHint(options?.signal, hint);
+		}
+		return next?.(event, model);
+	} };
+}
+function guardedOptions<T extends Pick<StreamOptions, "fetch" | "signal" | "onProviderStreamEvent">>(api: string, options: T | undefined, warn: Warning, firstEvent: FirstEventSource): T | undefined {
 	if (!supported(api)) return options;
-	return { ...options, fetch: async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+	return { ...options, ...(api === CODEX_API ? planEvents(options) : {}), fetch: async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
 		const response = await (options?.fetch ?? globalThis.fetch)(input, init);
 		if (response.status !== 429) return guardFirstEvent(api, input, init, response, firstEvent(), init?.signal ?? undefined);
 		const hint = parseRetryAfter(response.headers);
 		if (hint !== undefined) recordRetryHint(options?.signal, hint);
 		const signals = [init?.signal, options?.signal, input instanceof Request ? input.signal : undefined].filter((signal): signal is AbortSignal => Boolean(signal));
 		const signal = signals.length ? AbortSignal.any(signals) : undefined;
-		const limit = jsonQuota(await inspect(response, signal, warn));
-		if (!limit || signal?.aborted) return response;
+		const quota = jsonQuota(await inspect(response, signal, warn));
+		if (!quota || signal?.aborted) return response;
+		if (quota.kind === "plan") recordPlanHint(options?.signal, quota.hint);
 		if (api === CODEX_API) {
 			// Codex's raw retry catch recognizes this phrase, not x-should-retry. Retain only
 			// validated structure so message_end can classify it without exposing provider prose.
 			void response.body?.cancel().catch(() => warn("quota-body-cancel-failed"));
+			if (quota.kind === "plan") throw new Error(sanitizedPlanError(quota.hint));
+			const limit = quota.limit;
 			throw new Error(`Provider usage limit: ${JSON.stringify({ type: "rate_limit_error", ...(limit.retryAfterSeconds === undefined ? {} : { retry_after: limit.retryAfterSeconds }) })}`);
 		}
 		const headers = new Headers(response.headers); headers.set("x-should-retry", "false");

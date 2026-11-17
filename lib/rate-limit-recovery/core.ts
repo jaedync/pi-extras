@@ -3,6 +3,7 @@ import { formatDuration } from "../status-plus-logic.ts";
 import type { RecoveryConfig } from "./config.ts";
 import { providerFamily } from "../provider-family.ts";
 import { limitKey, planBilled } from "../plan-billing.ts";
+import type { ReadingRefusal } from "./plan-limit.ts";
 
 const MAX_ERROR_CHARS = 32_768;
 const MAX_RETRY_SECONDS = 7 * 24 * 3600;
@@ -17,6 +18,12 @@ export interface CapturedLimit extends RateLimit {
 	readonly scope: string;
 	readonly observedAtMs: number;
 	readonly resetAtMs?: number;
+	/** A ChatGPT plan usage limit (plan-limit.ts), not a structured rate-limit error. */
+	readonly kind?: "plan";
+	/** The plan window that is full ("5h", "7d"), when the provider or a reading names it. */
+	readonly window?: string;
+	/** Why a plan limit has no reset time. */
+	readonly readingRefusal?: ReadingRefusal;
 }
 export interface WaitPlan { readonly delayMs: number; readonly pausedAtMs: number; readonly resumeAtMs: number }
 export type WaitRefusal = "unknown-reset" | "too-long" | "attempt-limit" | "wait-budget";
@@ -70,13 +77,25 @@ export function planWait(limit: CapturedLimit, config: RecoveryConfig, spentMs: 
 	return { delayMs, pausedAtMs: now, resumeAtMs };
 }
 
+/** A plan limit with a known reset (from the provider or a reading); its scope is the model's plan. */
+export function capturePlanLimit(model: ModelIdentity, observedAtMs: number, reset: { readonly resetAtMs?: number; readonly window?: string; readonly readingRefusal?: ReadingRefusal }): CapturedLimit {
+	return {
+		provider: clean(model.provider, "unknown provider"), model: clean(model.model ?? model.id, "unknown model"),
+		scope: scopeFor(model), observedAtMs, kind: "plan",
+		...(reset.resetAtMs !== undefined ? { resetAtMs: reset.resetAtMs, retryAfterSeconds: Math.max(0, Math.ceil((reset.resetAtMs - observedAtMs) / 1000)) } : {}),
+		...(reset.window !== undefined ? { window: clean(reset.window, "plan") } : {}),
+		...(reset.readingRefusal !== undefined ? { readingRefusal: reset.readingRefusal } : {}),
+	};
+}
+
 export function failureMessage(limit: CapturedLimit, now: number, reason: string): string {
 	const seconds = limit.resetAtMs === undefined ? undefined : Math.max(0, Math.ceil((limit.resetAtMs - now) / 1000));
 	const reset = seconds === undefined ? "The reset time is unknown."
 		: `Expected reset at ${new Date(limit.resetAtMs!).toISOString()} (in ${formatDuration(seconds * 1000, true)}; ${seconds} seconds).`;
 	// Pi deliberately treats quota failures as non-transient. This prevents its
 	// short retry loop from competing with the bounded recovery boundary below.
-	return `Request quota exceeded for ${limit.provider}: the provider rate limit was reached. ${reset} ${reason}`;
+	const what = limit.kind === "plan" ? `the ChatGPT plan usage limit was reached${limit.window ? ` (the ${limit.window} window is full)` : ""}` : "the provider rate limit was reached";
+	return `Request quota exceeded for ${limit.provider}: ${what}. ${reset} ${reason}`;
 }
 
 export function resumedMessage(limit: CapturedLimit, pausedAtMs: number, resumedAtMs: number, model: ModelIdentity | undefined, minimumElapsedMs = 0): string {

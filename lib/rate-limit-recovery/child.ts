@@ -5,7 +5,8 @@
 import type { ExtensionContext, InlineExtension, MessageEndEvent, MessageEndEventResult } from "@earendil-works/pi-coding-agent";
 import { CONFIG_FILE, readSection } from "../extras-config.ts";
 import { loadConfig } from "./config.ts";
-import { captureLimit, failureMessage, parseRateLimit } from "./core.ts";
+import { captureLimit, capturePlanLimit, failureMessage, parseRateLimit, type CapturedLimit } from "./core.ts";
+import { isPlanLimitText, parsePlanHint, planLimited, takePlanHint, windowName } from "./plan-limit.ts";
 import { RECOVERY_TYPE } from "./entry-type.ts";
 import { TransientBackoff, type ConnectionEvidence, type TransientDeps } from "./transient.ts";
 import type { LocalPolicy } from "./local.ts";
@@ -22,12 +23,25 @@ function warn(options: QuotaTransportOptions, code: string): void {
 	} catch { console.warn("Rate-limit child guard: warning-handler-failed."); }
 }
 
+/** A ChatGPT plan limit, with the reset only when the provider sent one: a child never waits, so it never polls. */
+function planLimit(message: Extract<MessageEndEvent["message"], { role: "assistant" }>, hint: ReturnType<typeof takePlanHint>, now: number): CapturedLimit | undefined {
+	if (!planLimited(message.provider)) return undefined;
+	const found = hint ?? parsePlanHint(message.errorMessage, now);
+	if (!found && !isPlanLimitText(message.errorMessage)) return undefined;
+	return capturePlanLimit(message, now, {
+		...(found?.resetAtMs !== undefined ? { resetAtMs: found.resetAtMs } : {}),
+		...(found?.windowMinutes !== undefined ? { window: windowName(found.windowMinutes) } : {}),
+	});
+}
+
 function quotaResult(event: MessageEndEvent, ctx: ExtensionContext): MessageEndEventResult | undefined {
-	if (event.message.role !== "assistant" || event.message.stopReason !== "error") return undefined;
-	const parsed = parseRateLimit(event.message.errorMessage);
-	if (!parsed) return undefined;
+	if (event.message.role !== "assistant") return undefined;
+	const hint = takePlanHint(ctx.signal);
+	if (event.message.stopReason !== "error") return undefined;
 	const now = Date.now();
-	const limit = captureLimit(event.message, parsed, now);
+	const parsed = parseRateLimit(event.message.errorMessage);
+	const limit = parsed ? captureLimit(event.message, parsed, now) : planLimit(event.message, hint, now);
+	if (!limit) return undefined;
 	// Keep the error intact for the parent while preventing native turn retries.
 	ctx.abort();
 	return { message: { ...event.message, errorMessage: failureMessage(limit, now, "Subagents never automatically wait or resume. Choose another provider or retry after the reset.") } };

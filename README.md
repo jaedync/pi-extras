@@ -1233,6 +1233,29 @@ retains the cooldown and uses the newly selected model on resume. Switching
 outside that scope cancels. Other providers retain waits across models on the
 same provider.
 
+The ChatGPT plan's usage limit (the `openai-codex` login and Sign in with
+ChatGPT on `openai`) sends no `retry_after`. Recovery takes its reset time
+from one of two sources:
+
+- Codex sends `usage_limit_reached` with `resets_at` and
+  `limit_window_minutes`, in an HTTP 429 body or a WebSocket `error` event.
+  The transport keeps only these fields. That reset time is exact.
+- Sign in with ChatGPT sends only `subscription_sharing_usage_limit_exceeded`
+  or its text. Recovery then forces one poll of the plan's windows (the
+  readings that Status Plus and the `usage` tool show). Only a reading from
+  the last minute counts. A window counts as full when the provider marks it
+  blocked. When more than one window is full, the wait ends at the last reset.
+
+With no fresh reading, no full window, or no reset time, the turn stops as
+before. The error says why. A reset after `maxWaitSeconds`, such as the 7-day
+window, also stops the turn. The error gives the window and its reset time.
+An `openai` API key is not the plan, so it never waits on a plan limit. The
+provider's text is not sent to the model and is not logged. A subagent never
+waits on a plan limit: it fails fast with the reset time when Codex sent one.
+A ChatGPT Business admin limit
+(`subscription_sharing_workplace_individual_usage_limit_exceeded`) is no plan
+window and never waits.
+
 Before the retried request, a persisted message records the actual elapsed
 wall time and UTC pause/resume timestamps, plus the limited and current models.
 If the system clock moves backward, the notice labels a lower bound from the

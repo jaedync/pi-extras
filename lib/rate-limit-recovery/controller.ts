@@ -5,7 +5,10 @@ import { CONFIG_FILE } from "../extras-config.ts";
 import { RECOVERY_TYPE } from "./entry-type.ts";
 import { operationalError } from "../operational-log.ts";
 import { loadConfig, saveConfig, type RecoveryConfig } from "./config.ts";
-import { captureLimit, failureMessage, parseRateLimit, planWait, resumedMessage, sameScope, type CapturedLimit, type WaitPlan, type WaitRefusal } from "./core.ts";
+import { captureLimit, capturePlanLimit, failureMessage, parseRateLimit, planWait, resumedMessage, sameScope, type CapturedLimit, type WaitPlan, type WaitRefusal } from "./core.ts";
+import { isPlanLimitText, parsePlanHint, planLimited, resetFromReadings, takePlanHint, windowName, type ReadingRefusal } from "./plan-limit.ts";
+import { sharedLimitStore, type LimitStore } from "../limit-store.ts";
+import { limitKey } from "../plan-billing.ts";
 import { isVirtualModel, routedModel } from "../routed-model.ts";
 import { waitForDelay, waitUI, type Wait } from "./wait.ts";
 import { createQuotaTransportGuard } from "./transport.ts";
@@ -24,6 +27,15 @@ const REFUSALS: Record<WaitRefusal, string> = {
 	"attempt-limit": "The automatic recovery limit for this run has been reached.",
 	"wait-budget": "The aggregate automatic wait budget for this run has been reached.",
 };
+// A plan rejection names no reset time when the provider sends none: the readings decide, or nothing does.
+const READING_REFUSALS: Record<ReadingRefusal, string> = {
+	"no-reading": "No usage reading of the ChatGPT plan from the last minute is available, so the reset time is unknown. Check the plan's windows with the usage tool.",
+	"not-blocked": "The plan's usage readings show no full window, so the reset time is unknown.",
+	"no-reset": "The full plan window's reading has no reset time.",
+};
+const PLAN_TOO_LONG = "The plan window resets after the automatic wait budget (maxWaitSeconds), so no wait was scheduled. Continue after the reset, or switch to a model of another provider.";
+/** The forced plan poll may hold the failed turn this long; status-plus's own poll timeout is 3 s. */
+const PLAN_POLL_MS = 5_000;
 
 export interface RecoveryOptions {
 	readonly configFile?: string;
@@ -37,8 +49,11 @@ export interface RecoveryOptions {
 	readonly random?: () => number;
 	/** The local-server check; tests stub it so no request leaves the process. */
 	readonly probe?: Probe;
+	/** Plan limit readings; tests pass their own store. */
+	readonly limits?: LimitStore;
 }
 interface Pending { readonly limit: CapturedLimit; readonly eligible: boolean }
+type AssistantFailure = Extract<MessageEndEvent["message"], { role: "assistant" }>;
 interface Active { readonly controller: AbortController; readonly ctx: ExtensionContext; readonly scope: string }
 
 /** Esc and Ctrl+C cancel an idle wait only with no draft: with a draft they belong to the editor. */
@@ -54,6 +69,7 @@ export class Recovery {
 	private readonly now: () => number;
 	private readonly wait: Wait;
 	private readonly firstEvent: Partial<FirstEventPolicy>;
+	private readonly limits: LimitStore;
 	private config: RecoveryConfig;
 	private pending: Pending | undefined;
 	private active: Active | undefined;
@@ -76,6 +92,7 @@ export class Recovery {
 		this.now = options.now ?? Date.now;
 		this.wait = options.wait ?? waitForDelay;
 		this.firstEvent = options.firstEvent ?? {};
+		this.limits = options.limits ?? sharedLimitStore();
 		this.config = loadConfig(this.file, this.env);
 		this.transport = createQuotaTransportGuard({ firstEvent: () => this.firstEventPolicy(), onWarning: (code) => {
 			if (code === "unsupported-mixed-api" || code === "unsupported-default-model-api") this.unsupportedTransport = true;
@@ -214,26 +231,61 @@ export class Recovery {
 		}
 	}
 
-	private reasonFor(ctx: ExtensionContext, plan: WaitPlan | WaitRefusal): string {
+	private refusal(limit: CapturedLimit, plan: WaitRefusal): string {
+		if (limit.kind !== "plan") return REFUSALS[plan];
+		if (plan === "unknown-reset") return READING_REFUSALS[limit.readingRefusal ?? "no-reading"];
+		return plan === "too-long" ? PLAN_TOO_LONG : REFUSALS[plan];
+	}
+
+	private reasonFor(ctx: ExtensionContext, limit: CapturedLimit, plan: WaitPlan | WaitRefusal): string {
 		if (this.role === "subagent" || ctx.mode !== "tui") return "Subagents and noninteractive sessions never automatically wait or resume.";
 		if (!this.config.autoWait) return "Automatic waiting is off. Enable it with /rate-limit-recovery on.";
 		if (!ctx.hasUI || !ctx.signal || ctx.signal.aborted) return "The active operation cannot wait or was cancelled.";
-		if (typeof plan === "string") return REFUSALS[plan];
+		if (typeof plan === "string") return this.refusal(limit, plan);
 		return "Automatic recovery will wait for the cooldown plus its safety margin.";
 	}
 
-	private messageEnd(event: MessageEndEvent, ctx: ExtensionContext): MessageEndEventResult | undefined {
+	/**
+	 * A ChatGPT plan usage limit. The reset comes from the provider when it sends
+	 * one (Codex), else from a fresh reading of the plan's windows, after one
+	 * forced poll. With neither, the limit has no reset and no wait follows.
+	 */
+	private async planLimit(message: AssistantFailure, ctx: ExtensionContext): Promise<CapturedLimit | undefined> {
+		const hint = takePlanHint(ctx.signal);
+		if (!planLimited(message.provider)) return undefined;
+		const observedAtMs = this.now();
+		const found = hint ?? parsePlanHint(message.errorMessage, observedAtMs);
+		if (!found && !isPlanLimitText(message.errorMessage)) return undefined;
+		const window = found?.windowMinutes !== undefined ? windowName(found.windowMinutes) : undefined;
+		if (found?.resetAtMs !== undefined) return capturePlanLimit(message, observedAtMs, { resetAtMs: found.resetAtMs, ...(window ? { window } : {}) });
+		await this.pollPlan(message.provider);
+		const reset = resetFromReadings(this.limits.get(limitKey(message.provider)), observedAtMs);
+		return capturePlanLimit(message, observedAtMs, typeof reset === "string" ? { readingRefusal: reset, ...(window ? { window } : {}) } : reset);
+	}
+
+	private async pollPlan(provider: string): Promise<void> {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await Promise.race([this.limits.refresh(provider, true), new Promise<void>((resolve) => { timer = setTimeout(resolve, PLAN_POLL_MS); })]);
+		} catch (error) {
+			// A failed poll leaves the last reading; resetFromReadings then decides from it or refuses.
+			operationalError(join(dirname(this.file), "rate-limit-recovery.log"), RECOVERY_TYPE, `plan limit poll failed (${error instanceof Error ? error.name : "unknown error"})`);
+		} finally { clearTimeout(timer); }
+	}
+
+	private async messageEnd(event: MessageEndEvent, ctx: ExtensionContext): Promise<MessageEndEventResult | undefined> {
 		if (this.stopped || event.message.role !== "assistant") return undefined;
 		this.pending = undefined; this.ready = false;
 		const transient = this.transient.messageEnd(event.message, ctx);
-		if (transient) return { message: transient };
-		if (event.message.stopReason !== "error") return undefined;
+		if (transient) { takePlanHint(ctx.signal); return { message: transient }; }
+		if (event.message.stopReason !== "error") { takePlanHint(ctx.signal); return undefined; }
 		const parsed = parseRateLimit(event.message.errorMessage);
-		if (!parsed) return undefined;
-		const limit = captureLimit(event.message, parsed, this.now());
+		const limit = parsed ? captureLimit(event.message, parsed, this.now()) : await this.planLimit(event.message, ctx);
+		if (parsed) takePlanHint(ctx.signal);
+		if (!limit || this.stopped) return undefined;
 		this.limited = limit;
 		const plan = planWait(limit, this.config, this.spentMs, this.attempts, this.now());
-		const reason = this.reasonFor(ctx, plan);
+		const reason = this.reasonFor(ctx, limit, plan);
 		const eligible = this.role === "main" && ctx.mode === "tui" && ctx.hasUI && this.config.autoWait && !!ctx.signal && !ctx.signal.aborted && typeof plan !== "string" && this.inScope(limit.scope, ctx);
 		this.pending = { limit, eligible };
 		if (this.role === "subagent" || ctx.mode !== "tui") ctx.abort();
