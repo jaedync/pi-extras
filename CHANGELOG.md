@@ -2,6 +2,32 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.45.4 - 2026-11-17
+
+### Fixed
+
+- Rate-limit Recovery: a ChatGPT plan usage limit stopped the session, also
+  with `autoWait` on. It sends no `retry_after`, so no wait was planned.
+  - Codex (`openai-codex`) sends `usage_limit_reached` with `resets_at` and
+    `limit_window_minutes`, in an HTTP 429 body or a WebSocket `error` event.
+    The transport keeps only these fields, and the wait ends at that reset.
+  - Sign in with ChatGPT (`openai`) sends no reset time. Recovery forces one
+    poll of the plan windows and waits for the reset of the full window in a
+    reading from the last minute.
+  - With no fresh reading, no full window, or a reset after `maxWaitSeconds`
+    (such as the 7-day window), the turn stops. The error gives the window,
+    the reset time and the reason.
+  - The poll runs only in a session that can wait. Esc ends it.
+  - An `openai` API key is not the plan and never waits on it. Subagents still
+    never wait; their error now gives the plan's reset time.
+
+### Added
+
+- Rate-limit Recovery: `planWaitBudget` (default `"each"`). Each ChatGPT
+  plan-window wait gets its own `maxWaitSeconds`, so a long run can wait at
+  several 5-hour resets. `maxRecoveries` still caps the count. `"run"` keeps
+  one budget for the whole run.
+
 ## 0.45.3 - 2026-11-16
 
 ### Fixed
