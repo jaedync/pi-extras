@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -42,6 +42,32 @@ test('a shard is i/n with 1 <= i <= n, and anything else is refused', () => {
   assert.equal(parseShard(undefined), undefined);
   assert.equal(parseShard(''), undefined);
   for (const bad of ['0/4', '5/4', '1/0', '1', 'a/b', '1/4 ', '-1/4']) assert.throws(() => parseShard(bad), /PI_TEST_SHARD/, bad);
+});
+
+// The matrix form that ci.yml uses: `shard: [1, 2, ...]`, excludes `- { os: x, shard: n }` and includes
+// `- { os: x, shards: n }` that give each OS (or Pi version) its shard count.
+function shardedJobs(workflow) {
+  const jobs = workflow.split(/^ {2}(?=[\w-]+:$)/m).slice(1);
+  return jobs.filter((job) => /^\s+shard: \[/m.test(job)).map((job) => {
+    const name = job.slice(0, job.indexOf(':'));
+    const all = /^\s+shard: \[([\d, ]+)\]$/m.exec(job)[1].split(',').map(Number);
+    const pairs = (key) => [...job.matchAll(new RegExp(`^\\s+- \\{ (\\w+): ([\\w.-]+), ${key}: (\\d+) \\}$`, 'gm'))]
+      .map((m) => ({ key: m[1], value: m[2], n: Number(m[3]) }));
+    return { name, job, all, excludes: pairs('shard'), includes: pairs('shards') };
+  });
+}
+
+test('the CI matrix runs shards 1 to `shards` for each OS, so no shard of the plan is left without a job', () => {
+  const jobs = shardedJobs(readFileSync('.github/workflows/ci.yml', 'utf8'));
+  assert.deepEqual(jobs.map((job) => job.name), ['test', 'pi-versions']);
+  for (const { name, job, all, excludes, includes } of jobs) {
+    assert.ok(includes.length > 0, `${name}: no shard count`);
+    for (const { key, value, n } of includes) {
+      const left = all.filter((shard) => !excludes.some((ex) => ex.key === key && ex.value === value && ex.n === shard));
+      assert.deepEqual(left, Array.from({ length: n }, (_, k) => k + 1), `${name} ${value}`);
+    }
+    assert.match(job, /PI_TEST_SHARD: \$\{\{ matrix\.shard \}\}\/\$\{\{ matrix\.shards \}\}/, `${name} passes its shard to npm test`);
+  }
 });
 
 test('the timings reporter names each file by its repository path with forward slashes', () => {

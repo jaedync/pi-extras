@@ -9,14 +9,26 @@ on:
 permissions:
   contents: read
 jobs:
+  # Each OS and Node pair runs the whole suite, split over shards: scripts/test-files.mjs packs the unit test files by
+  # the seconds in .ci/timings.json, and tests/test-shards.test.mjs checks that the shards of every count cover each
+  # file exactly once and that this matrix lists shards 1 to `shards`. Shard 1 also runs the short checks.
   test:
+    name: test (${{ matrix.os }}, ${{ matrix.node }}, ${{ matrix.shard }}/${{ matrix.shards }})
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
         node: [22, 24]
+        shard: [1, 2, 3, 4]
+        # GitHub runs at most 5 macOS jobs at a time on the free plan, so macOS gets 2 shards for each Node.
+        exclude:
+          - { os: macos-latest, shard: 3 }
+          - { os: macos-latest, shard: 4 }
+        include:
+          - { os: ubuntu-latest, shards: 4 }
+          - { os: macos-latest, shards: 2 }
     runs-on: ${{ matrix.os }}
-    # macOS runs take 8 to 9 minutes, and a slow runner went past 10 on the 0.37.0 release.
-    timeout-minutes: 15
+    # A whole macOS run took 8 to 9 minutes and once went past 10 (0.37.0); a shard runs half of it.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,18 +36,36 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run test:install
-      - run: npm run audit:package
+      - if: matrix.shard == 1
+        run: npm run typecheck
+      - name: Run npm test (shard ${{ matrix.shard }} of ${{ matrix.shards }})
+        env:
+          PI_TEST_SHARD: ${{ matrix.shard }}/${{ matrix.shards }}
+          PI_TEST_TIMINGS: test-timings.xml
+        run: npm test
+      - if: matrix.shard == 1
+        run: npm run test:install
+      - if: matrix.shard == 1
+        run: npm run audit:package
+      # The seconds of each test file, for the next .ci/timings.json (CONTRIBUTING.md, periodic upkeep).
+      - if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-timings-${{ matrix.os }}-node${{ matrix.node }}-${{ matrix.shard }}of${{ matrix.shards }}
+          path: test-timings.xml
+          retention-days: 30
+          if-no-files-found: ignore
   # pi-extras supports only the latest Pi. The job above tests the Pi in package-lock, which is also the minimum in
   # the README and the peer ranges (a test checks it). This one tests the newest Pi that npm serves now.
   pi-versions:
-    name: Pi ${{ matrix.pi }}
+    name: Pi ${{ matrix.pi }} (${{ matrix.shard }}/${{ matrix.shards }})
     strategy:
       fail-fast: false
       matrix:
         pi: [latest]
+        shard: [1, 2, 3, 4]
+        include:
+          - { pi: latest, shards: 4 }
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -46,7 +76,10 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - name: Typecheck and test with Pi ${{ matrix.pi }}
-        run: npm run test:pi -- ${{ matrix.pi }} --no-restore
+        env:
+          PI_TEST_SHARD: ${{ matrix.shard }}/${{ matrix.shards }}
+          PI_VERSION: ${{ matrix.pi }}
+        run: npm run test:pi -- "$PI_VERSION" --no-restore
   secrets:
     runs-on: ubuntu-latest
     timeout-minutes: 5

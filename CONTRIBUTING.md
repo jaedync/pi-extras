@@ -25,6 +25,18 @@ in `dependencies`; Pi-provided libraries belong in `peerDependencies`. There mus
 be no install/prepare lifecycle hooks. Keep the Pi resource manifest and package
 file allowlist explicit. Do not bundle Pi itself.
 
+CI splits `npm test` over shards: `PI_TEST_SHARD=2/4 npm test` runs the second
+of four parts of `test:unit` (shard 1 also runs `lint:slop` and `test:kagi`).
+`scripts/test-files.mjs` packs the files by the seconds in `.ci/timings.json`.
+A new test file gets the median time, so an old timings file is slower, never
+wrong. To refresh it, download the timings of a recent green `main` run and
+commit the result:
+
+```sh
+gh run download <run-id> --pattern 'test-timings-macos-latest-node24-*' --dir ~/.cache/pi-extras-timings
+node skills/speed-up-ci/scripts/ci.mjs timings ~/.cache/pi-extras-timings/*/test-timings.xml --out .ci/timings.json
+```
+
 The default branch is consumed by unpinned Git installs. Review changes and pass
 CI before merging. A tag is an optional pin, not the update mechanism for
 unpinned users.
