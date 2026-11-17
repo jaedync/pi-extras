@@ -48,6 +48,24 @@ test("dropped connections, stalls, busy proxies and unavailable gateways are con
 	}
 });
 
+// Pi 1.5 appends the deepest cause of an SDK connection error (pi-ai utils/error-body.js withCauseDetail).
+test("Pi 1.5's SDK connection errors with their cause are connection failures", () => {
+	const cases: Record<string, string> = {
+		"Connection error.: other side closed (UND_ERR_SOCKET)": "dropped",
+		"Connection error.: connect ECONNREFUSED 127.0.0.1:3456": "dropped",
+		"Connection error.: read ECONNRESET": "dropped",
+		"Connection error.: getaddrinfo ENOTFOUND api.example.test": "dropped",
+		"terminated: other side closed (UND_ERR_SOCKET)": "dropped",
+		"Request timed out.: Headers Timeout Error (UND_ERR_HEADERS_TIMEOUT)": "slow",
+	};
+	for (const [text, cause] of Object.entries(cases)) assert.equal(connectionFailure(failed(text)), cause, text);
+	for (const text of [
+		// The cause is one short line; anything else is not the SDK's own report.
+		`Connection error.: ${"x".repeat(300)}`, "Connection error.: first\nsecond", "Connection error.:", "Connection error.: ",
+		"Connection error.: insufficient_quota", "Connection error.: 401 unauthorized",
+	]) assert.equal(connectionFailure(failed(text)), undefined, JSON.stringify(text));
+});
+
 test("quotas, usage limits, auth, context overflow and other failures are not connection failures", () => {
 	for (const text of [
 		SHARING, "You exceeded your current quota (insufficient_quota)", "billing hard limit", "Monthly usage limit reached",

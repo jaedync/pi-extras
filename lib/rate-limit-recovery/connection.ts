@@ -22,6 +22,9 @@ const GATEWAY = /^50[234]\b/;
 const DOWN = /unavailable|overloaded|bad gateway|gateway time-?out/i;
 // An expired or wrong key fails every time, whatever status a gateway wraps it in.
 const AUTH = /api_key_expired|authentication_error|permission_error|invalid.?api.?key|unauthori[sz]ed|^40[13]\b/i;
+// Pi 1.5 appends the deepest cause to an SDK connection error: "Connection error.: other side closed
+// (UND_ERR_SOCKET)". Only one short line after the SDK's own text counts (pi-ai utils/error-body.js).
+const WITH_CAUSE = /^(Connection error\.?|terminated|Request timed out\.?): (\S[^\n]{0,199})$/i;
 // A long hint would hold an unattended run; the budget still decides whether to wait at all.
 export const MAX_HINT_SECONDS = 60;
 // Beyond a day the field is not a delay in seconds.
@@ -32,8 +35,9 @@ export function connectionCause(text: string): ConnectionCause | undefined {
 	const trimmed = text.trim();
 	// A full context fails the same way on every retry, even inside a 5xx; Pi compacts instead.
 	if (AUTH.test(trimmed) || isContextOverflowText(trimmed)) return undefined;
-	if (DROPPED.test(trimmed)) return "dropped";
-	if (SLOW.test(trimmed)) return "slow";
+	const head = WITH_CAUSE.exec(trimmed)?.[1] ?? trimmed;
+	if (DROPPED.test(head)) return "dropped";
+	if (SLOW.test(head)) return "slow";
 	if (BUSY.test(trimmed)) return "busy";
 	if (GATEWAY.test(trimmed) && DOWN.test(trimmed)) return "down";
 	return undefined;
