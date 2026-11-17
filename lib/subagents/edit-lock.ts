@@ -13,6 +13,7 @@
  * child's `bash` call that changed files takes the lock after the fact
  * (bash-guard.ts).
  */
+import { waitsUntil } from "./plan-wait.ts";
 import { LIVE_STATES, type AgentRecord } from "./types.ts";
 
 /** Begins the key of a child's edits outside any git work tree; no path does. */
@@ -32,7 +33,14 @@ function placeOf(key: string, record: AgentRecord): string {
 	return key === record.worktree?.path ? `the worktree ${key}` : `the checkout ${key}`;
 }
 
-function lockedError(holder: string, record: AgentRecord, key: string): string {
+function lockedError(holder: string, record: AgentRecord, key: string, held?: AgentRecord): string {
+	// A run that waits for a ChatGPT plan reset keeps its lock: it is the same run, with its edits half done (plan-wait.ts).
+	const until = held ? waitsUntil(held) : undefined;
+	if (until) {
+		const checkout = key.slice(OUTSIDE.length);
+		const place = key.startsWith(OUTSIDE) ? `for files outside git${checkout ? ` in the workspace ${checkout}` : ""}` : `of ${placeOf(key, record)}`;
+		return `${holder} holds the edit lock ${place} while it waits for the ChatGPT plan reset until ${until}, and keeps it until its run ends. Do work that does not edit files, or tell ${record.parent} you need a worktree (isolation: "worktree").`;
+	}
 	if (!key.startsWith(OUTSIDE)) {
 		return `${holder} is editing files in ${placeOf(key, record)} until its run ends. Do work that does not edit files, or tell ${record.parent} you need a worktree (isolation: "worktree").`;
 	}
@@ -102,7 +110,7 @@ export class EditLocks {
 			this.holders.set(key, name);
 			return undefined;
 		}
-		return lockedError(holder, record, key);
+		return lockedError(holder, record, key, this.family.get(holder));
 	}
 
 	/** After `name`'s bash call changed `paths` in the work tree `root`: takes its lock as an edit would, or warns and returns a note for the call's result. */

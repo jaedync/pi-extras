@@ -56,6 +56,8 @@ export function teamHarness(options: HarnessOptions = {}) {
 				return {
 					sessionFile: `${sessionDir}/${record.name}.jsonl`,
 					prompt: (text) => new Promise<void>((resolve, reject) => {
+						// As the real guard: a plan limit belongs to one prompt of one launch (rate-limit-recovery/child.ts).
+						planLimits.delete(record.name);
 						say(record.name, user(text));
 						calls.set(record.name, [...(calls.get(record.name) ?? []), {
 							text, model: record.model, fail: reject,

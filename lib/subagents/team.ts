@@ -26,7 +26,7 @@ import { checkError, mergeCheck, RunChecks } from "./checks.ts";
 import { checkoutOf } from "./checkout.ts";
 import { EditLocks } from "./edit-lock.ts";
 import { fallbackNote, planFallback } from "./fallback.ts";
-import { decidePlanWait, endWait, type PlanTimer, planWaitActivity, planWaitNote, PlanWaits, REAL_TIMER } from "./plan-wait.ts";
+import { blockedOnWait, decidePlanWait, endWait, type PlanTimer, planWaitActivity, planWaitNote, PlanWaits, REAL_TIMER, type RunningClock } from "./plan-wait.ts";
 import type { RecoveryConfig } from "../rate-limit-recovery/config.ts";
 import { clockNote, runClockHead } from "./format.ts";
 import { messagesSince, stillUnread, unreadToInbox } from "./mailbox.ts";
@@ -509,6 +509,8 @@ export class Team implements HostTeam {
 		const record = next.answerHeld && next.state !== "interrupted" ? { ...next, answerHeld: undefined } : next;
 		this.records.set(record.name, record);
 		this.budgets.follow(record.name, record.state);
+		// An agent blocked on a run that waits for a plan reset does no work meanwhile, so its clock stops too.
+		this.budgets.hold(blockedOnWait(this.list()), (name) => this.records.get(name)?.state);
 		this.locks.follow(record);
 		for (const listener of this.listeners) listener(record);
 	}
@@ -878,9 +880,11 @@ export class Team implements HostTeam {
 		let config: RecoveryConfig | undefined;
 		try { config = this.options.planWait?.(); }
 		catch (failure) { (this.options.warn ?? console.warn)(`subagents: could not read rateLimitRecovery settings: ${failure instanceof Error ? failure.message : String(failure)}`); }
-		const plan = decidePlanWait(record, this.sessions.get(name)?.planLimit?.(), error, config, this.now());
+		const plan = decidePlanWait(record, this.sessions.get(name)?.planLimit?.(), error, config, this.now(), this.runningAbove(record));
 		if (!plan.ok) return plan.error;
 		this.swaps.take(name);
+		// The released session's hooks belong to a launch that ended: a late update must not touch the waiting record.
+		this.launches.set(name, (this.launches.get(name) ?? 0) + 1);
 		// Read before the state change below stops the clock: the run goes on with what it had used.
 		this.continuing.set(name, this.continuing.get(name) ?? this.budgets.used(name));
 		// Its session goes, so its report so far stays on the record for a stop during the wait.
@@ -889,6 +893,17 @@ export class Team implements HostTeam {
 		this.planWaits.arm(name, plan.delayMs);
 		this.pump();
 		return true;
+	}
+
+	/** The ancestors of `record` whose work clocks go on while it waits: all but those blocked on it (plan-wait.ts `blockedOnWait`). */
+	private runningAbove(record: AgentRecord): RunningClock[] {
+		const blocked = blockedOnWait(this.list(), (entry) => entry.name === record.name);
+		const clocks: RunningClock[] = [];
+		for (let parent = this.records.get(record.parent); parent; parent = this.records.get(parent.parent)) {
+			const clock = this.budgets.clock(parent.name);
+			if (parent.state === "running" && clock && !blocked.has(parent.name)) clocks.push({ name: parent.name, leftMs: clock.minutes * 60_000 - clock.usedMs });
+		}
+		return clocks;
 	}
 
 	/** The wait ends, at its timer or at once for a message: the run goes on, the same run on the same model, when a slot is free. */

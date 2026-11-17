@@ -14,6 +14,7 @@ import { type RecoveryConfig, subagentPlanWaitOn } from "../rate-limit-recovery/
 import { type CapturedLimit, planWait, type WaitRefusal } from "../rate-limit-recovery/core.ts";
 import { planLimited } from "../rate-limit-recovery/plan-limit.ts";
 import { isQuotaError } from "../rate-limit-recovery/transient.ts";
+import { MAIN } from "./names.ts";
 import type { AgentRecord, PlanWaitState } from "./types.ts";
 
 /** Sets and clears the wait's timer; tests give their own. */
@@ -22,10 +23,17 @@ export interface PlanTimer {
 	clear(handle: unknown): void;
 }
 
+// Unref'd: a headless run stays open while a child is live (headless.ts), and a timer alone must not hold Pi open.
 export const REAL_TIMER: PlanTimer = {
-	set: (fn, ms) => setTimeout(fn, ms),
+	set: (fn, ms) => { const timer = setTimeout(fn, ms); timer.unref?.(); return timer; },
 	clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
+
+/** An ancestor whose work clock goes on while the run waits, and the budget it has left. */
+export interface RunningClock {
+	readonly name: string;
+	readonly leftMs: number;
+}
 
 export type PlanWaitPlan = { ok: true; wait: PlanWaitState; delayMs: number } | { ok: false; error: string };
 
@@ -46,20 +54,55 @@ function refusal(why: WaitRefusal, config: RecoveryConfig, waits: number): strin
  * guard captured counts, never prose. With the feature off the error stays as
  * it is; with it on, a refusal says why the parent did not wait.
  */
-export function decidePlanWait(record: Pick<AgentRecord, "runs" | "planWait">, limit: CapturedLimit | undefined, error: string, config: RecoveryConfig | undefined, now: number): PlanWaitPlan {
+export function decidePlanWait(record: Pick<AgentRecord, "runs" | "planWait">, limit: CapturedLimit | undefined, error: string, config: RecoveryConfig | undefined, now: number,
+	ancestors: readonly RunningClock[] = []): PlanWaitPlan {
 	if (!config || !subagentPlanWaitOn(config) || limit?.kind !== "plan" || !planLimited(limit.provider) || !isQuotaError(error)) return { ok: false, error };
 	const prior = record.planWait?.run === record.runs ? record.planWait : undefined;
 	const waits = prior?.waits ?? 0;
 	const waitedMs = prior?.waitedMs ?? 0;
 	const plan = planWait(limit, config, waitedMs, waits, now);
 	if (typeof plan === "string") return { ok: false, error: `${sentence(error)} ${refusal(plan, config, waits)}` };
+	// An ancestor's budget that ends first would wrap it up, and that stops this run (wrap-up.ts).
+	const short = ancestors.find((clock) => clock.leftMs < plan.delayMs);
+	if (short) {
+		return { ok: false, error: `${sentence(error)} The parent did not wait for the plan reset: ${short.name}'s work clock has ${Math.floor(short.leftMs / 60_000)} minutes left, less than the wait of ${Math.ceil(plan.delayMs / 60_000)} minutes, and its budget would stop this run.` };
+	}
 	return { ok: true, delayMs: plan.delayMs, wait: { run: record.runs, waits: waits + 1, waitedMs, pausedAt: now, resetAt: limit.resetAtMs, resumeAt: plan.resumeAtMs,
 		...(limit.window !== undefined ? { window: limit.window } : {}) } };
 }
 
+/**
+ * The agents blocked on a run that waits (a `wait: true` call, up the chain):
+ * their clocks stop too, since they can do nothing until it goes on.
+ */
+export function blockedOnWait(records: readonly AgentRecord[], waiting: (record: AgentRecord) => boolean = waits): Set<string> {
+	const byName = new Map(records.map((record) => [record.name, record]));
+	const held = new Set<string>();
+	for (const record of records) {
+		if (!waiting(record)) continue;
+		for (let current = record; current.blocking && current.parent !== MAIN;) {
+			const parent = byName.get(current.parent);
+			if (!parent || held.has(parent.name)) break;
+			held.add(parent.name);
+			current = parent;
+		}
+	}
+	return held;
+}
+
+/** Whether the record's run waits for a plan reset now. */
+export const waits = (record: Pick<AgentRecord, "state" | "planWait">): boolean => record.state === "queued" && record.planWait?.pausedAt !== undefined;
+
 /** The row's words while the run waits: when it goes on, in UTC. */
 export function planWaitActivity(wait: PlanWaitState): string {
-	return `waiting for the ChatGPT plan reset until ${iso(wait.resumeAt).slice(11, 16)} UTC`;
+	return `waiting for the ChatGPT plan reset until ${utcClock(wait.resumeAt)}`;
+}
+
+const utcClock = (ms: number | undefined): string => `${iso(ms).slice(11, 16)} UTC`;
+
+/** When the record's run goes on, as `22:10 UTC`, while it waits for a plan reset; else undefined. */
+export function waitsUntil(record: Pick<AgentRecord, "state" | "planWait">): string | undefined {
+	return waits(record) ? utcClock(record.planWait?.resumeAt) : undefined;
 }
 
 /** The record once its wait ended at `now`: its counts stay for the run, the wait under way goes. */

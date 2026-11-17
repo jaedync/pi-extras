@@ -14,6 +14,7 @@ import { DEFAULT_CONFIG, normalizeConfig, type RecoveryConfig, SUBAGENT_PLAN_WAI
 import { ChildIndex } from "../lib/subagents/restore.ts";
 import { recoveryDecision } from "../lib/subagents/recovery.ts";
 import { createChildRateLimitGuard } from "../lib/rate-limit-recovery/child.ts";
+import { REAL_TIMER } from "../lib/subagents/plan-wait.ts";
 import { agentStatus } from "../lib/subagents/status.ts";
 import { teamHarness } from "./support/team-harness.ts";
 import "./support/plan-login.ts";
@@ -284,6 +285,99 @@ test("a report from its own subagent does not end the wait: it waits in the inbo
 	await h.team.close();
 });
 
+test("a parent blocked on the waiting subagent (wait: true) stops its own work clock until the run goes on", async () => {
+	const { h, clock, timer, planFail } = setup();
+	const lead = h.spawn("Lead", { model: OPUS, maxMinutes: 30 });
+	await tick();
+	clock.now += 5 * MIN;
+	const helper = h.spawn("Helper", { model: SOL, parent: lead, blocking: true });
+	await tick();
+	planFail(helper, clock.now + 2 * HOUR);
+	await settle();
+	assert.equal(h.team.get(helper)!.state, "queued", "a reset past the parent's budget still waits: the parent's clock stops");
+	const before = h.team.budgetClock(lead)!.usedMs;
+	clock.now += 2 * HOUR + 10_000;
+	assert.equal(h.team.budgetClock(lead)!.usedMs, before, "no work time while its subagent waits");
+	assert.ok(before >= 5 * MIN && before < 6 * MIN, `${before}`);
+	timer.fire();
+	await settle();
+	assert.equal(h.team.get(helper)!.state, "running");
+	clock.now += MIN;
+	assert.equal(h.team.budgetClock(lead)!.usedMs, before + MIN, "the clock goes on with the run");
+	await h.team.close();
+});
+
+test("a parent whose clock still runs: the subagent waits only when the parent's budget outlasts the wait", async () => {
+	const { h, clock, timer, planFail } = setup();
+	const lead = h.spawn("Lead", { model: OPUS, maxMinutes: 30 });
+	await tick();
+	const far = h.spawn("Far", { model: SOL, parent: lead });
+	const near = h.spawn("Near", { model: SOL, parent: lead });
+	await tick();
+	clock.now += 5 * MIN;
+	planFail(far, clock.now + HOUR);
+	const done = await h.team.whenDone(far);
+	assert.equal(done.state, "failed");
+	assert.match(done.error ?? "", /The parent did not wait for the plan reset: Lead's work clock has 25 minutes left, less than the wait of 61 minutes, and its budget would stop this run\.$/i);
+	planFail(near, clock.now + 10 * MIN);
+	await settle();
+	assert.equal(h.team.get(near)!.state, "queued");
+	assert.equal(timer.pending.size, 1);
+	await h.team.close();
+});
+
+test("a late update through the released session's hooks changes nothing while the run waits", async () => {
+	const { h, clock, planFail } = setup();
+	const name = h.spawn("Task", { model: SOL, maxCost: 1 });
+	await tick();
+	const old = h.hooks.get(name)!;
+	planFail(name, clock.now + HOUR);
+	await settle();
+	const held = h.team.get(name)!;
+	old.update({ activity: "thinking", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 5 } });
+	await settle();
+	const after = h.team.get(name)!;
+	assert.equal(after.state, "queued");
+	assert.equal(after.activity, held.activity);
+	assert.equal(after.usage.cost, held.usage.cost);
+	await h.team.close();
+});
+
+test("the edit lock stays with the waiting run, and a refusal says until when", async (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "plan-wait-lock-"));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	const { h, clock, planFail } = setup(ON, { cwd: dir });
+	const writer = h.spawn("Write", { name: "writer", model: SOL });
+	const other = h.spawn("Other", { name: "other", model: OPUS });
+	await tick();
+	assert.equal(h.team.claimEdit(writer, join(dir, "a.txt")), undefined);
+	planFail(writer, clock.now + HOUR);
+	await settle();
+	assert.match(h.team.claimEdit(other, join(dir, "b.txt")) ?? "", /^writer holds the edit lock .* while it waits for the ChatGPT plan reset until 21:00 UTC, and keeps it until its run ends\./);
+	await h.team.close();
+});
+
+test("a message that ends the wait while every slot is taken says it is queued", async () => {
+	const { h, clock, planFail } = setup(ON, { maxConcurrent: 1 });
+	const name = h.spawn("Task", { model: SOL });
+	await tick();
+	planFail(name, clock.now + HOUR);
+	await settle();
+	const busy = h.spawn("Busy", { model: OPUS });
+	await settle();
+	assert.equal(h.team.get(busy)!.state, "running");
+	const sent = await h.team.send("main", name, "Go on.");
+	assert.equal(sent.ok && sent.delivered, "queued");
+	assert.equal(h.team.get(name)!.state, "queued");
+	await h.team.close();
+});
+
+test("the real timer does not hold the process open", () => {
+	const handle = REAL_TIMER.set(() => undefined, 60_000) as ReturnType<typeof setTimeout>;
+	try { assert.equal(handle.hasRef(), false); }
+	finally { REAL_TIMER.clear(handle); }
+});
+
 test("a close during the wait clears the timer and leaves the child interrupted with the wait on its row", async () => {
 	const { h, clock, timer, planFail } = setup();
 	const name = h.spawn("Task", { model: SOL });
@@ -365,22 +459,29 @@ test("event orders: a timer runs only while the record waits, and none outlives 
 		let state = seed;
 		const random = () => { state = (state * 1103515245 + 12345) % 2147483648; return state / 2147483648; };
 		const { h, clock, timer, planFail } = setup({ ...ON, maxRecoveries: 3 });
-		const name = h.spawn("Task", { model: SOL });
+		const lead = h.spawn("Lead", { model: OPUS, maxMinutes: 600 });
+		const peer = h.spawn("Peer", { model: OPUS });
+		await tick();
+		// Every third seed blocks its parent (wait: true), so the parent's clock follows the wait.
+		const name = h.spawn("Task", { model: SOL, parent: lead, blocking: seed % 3 === 0 });
 		await tick();
 		const trace: string[] = [];
 		let closed = false;
 		for (let step = 0; step < 10 && !closed; step++) {
 			const record = h.team.get(name)!;
 			const running = record.state === "running" && h.calls.get(name)?.length;
-			const events = ["advance", "fire", "message", "stop", "close", ...(running ? ["plan", "plan", "finish"] : [])];
+			const events = ["advance", "fire", "message", "parent", "peer", "stop", "close", ...(running ? ["plan", "plan", "finish"] : [])];
 			const event = events[Math.floor(random() * events.length)]!;
 			trace.push(event);
 			const launches = h.launched.length;
+			const waitedBefore = record.state === "queued" && record.planWait?.pausedAt !== undefined;
 			if (event === "plan") planFail(name, clock.now + HOUR);
 			else if (event === "finish") h.lastCall(name).finish("Done.");
 			else if (event === "advance") clock.now += 20 * MIN;
 			else if (event === "fire") timer.fire();
 			else if (event === "message") await h.team.send("main", name, `Note ${step}.`);
+			else if (event === "parent") await h.team.send(lead, name, `From the lead ${step}.`);
+			else if (event === "peer") await h.team.send(peer, name, `From a peer ${step}.`);
 			else if (event === "stop") await h.team.stop(name);
 			else { await h.team.close(); closed = true; }
 			await settle();
@@ -390,6 +491,16 @@ test("event orders: a timer runs only while the record waits, and none outlives 
 			if (after.planWait?.pausedAt !== undefined) assert.ok(after.state === "queued" || after.state === "interrupted", `seed ${seed}: ${trace.join(" ")}: a wait on a ${after.state} record`);
 			if (event === "stop" || event === "close") assert.equal(h.launched.length, launches, `seed ${seed}: ${trace.join(" ")}: a launch after ${event}`);
 			assert.ok((after.planWait?.waits ?? 0) <= 3);
+			// A peer's note never ends a wait.
+			if (event === "peer" && waitedBefore) assert.ok(waits && h.launched.length === launches, `seed ${seed}: ${trace.join(" ")}: a peer ended the wait`);
+			// The lead's clock stops exactly while its blocking subagent waits.
+			const leadClock = h.team.budgetClock(lead);
+			if (leadClock && h.team.get(lead)!.state === "running") {
+				const before = leadClock.usedMs;
+				clock.now += 1;
+				const moved = h.team.budgetClock(lead)!.usedMs !== before;
+				assert.equal(moved, !(waits && after.blocking), `seed ${seed}: ${trace.join(" ")}: the lead's clock ${moved ? "ran" : "stopped"}`);
+			}
 		}
 		if (!closed) await h.team.close();
 		assert.equal(timer.pending.size, 0, `seed ${seed}: ${trace.join(" ")}`);

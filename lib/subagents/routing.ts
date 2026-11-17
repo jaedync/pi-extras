@@ -256,7 +256,8 @@ export class Routing {
 		if (host.planWaiting?.(to)) {
 			if (!how.above) return { ok: true, delivered: "inbox" };
 			host.endPlanWait?.(to);
-			return { ok: true, delivered: "resumed" };
+			// With every slot taken it waits in line, as any relaunch does.
+			return { ok: true, delivered: host.get(to)?.state === "queued" ? "queued" : "resumed" };
 		}
 		return { ok: true, delivered: target.state === "queued" || target.state === "starting" ? "queued" : "inbox" };
 	}

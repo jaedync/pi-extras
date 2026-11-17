@@ -2939,18 +2939,25 @@ run. The child itself still fails fast. The wait needs all of these:
 - The reset plus `resumeMarginSeconds` is within `maxWaitSeconds` from now.
 - The run waited fewer than `maxRecoveries` times. With `planWaitBudget`
   `"run"`, the waits of one run also share `maxWaitSeconds`.
+- No agent above it has less of its time budget left than the wait, while
+  its clock still runs. That budget would end first and stop the run.
 
 A fallback model goes first: the run waits only when no fallback is left.
 While it waits, the child is `queued` and its row says `waiting for the
 ChatGPT plan reset until 22:10 UTC`. It holds no slot and no session, and
-its time budget does not count. At the reset plus the margin, the same run
+its time budget does not count. A parent that waits for it (`wait: true`)
+also stops its own clock until the run goes on, and so does each agent
+above that waits for that parent. The run keeps its edit lock, so other
+agents can't edit its checkout or worktree until it ends; their refusal
+gives the time the wait ends. At the reset plus the margin, the same run
 goes on, on the same model, from its session. The child first reads when it
 waited, from when to when in UTC. A later plan limit in that run waits again
 within the same limits. Otherwise the run fails, and its error says why the
 parent did not wait.
 
 A stop, a failure of its parent, a close and a shutdown end the wait. A
-message from main, its parent or the user resumes it at once. Other mail,
+message from main, its parent or the user resumes it at once (or puts it in
+line when every slot is taken). Other mail,
 such as a note from a peer or a report from its own subagent, waits in its
 inbox for the resumed run. A restart or a `/reload` that closes the team
 leaves the child interrupted, and the restore notice gives the reset time.

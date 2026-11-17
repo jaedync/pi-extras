@@ -87,6 +87,8 @@ export const costReason = (cost: number): string => `over its $${formatMoney(cos
 
 export class RunBudgets {
 	private readonly clocks = new Map<string, Clock>();
+	/** Running agents whose clock stops while a subagent they are blocked on waits for a ChatGPT plan reset (plan-wait.ts). */
+	private readonly held = new Set<string>();
 	private readonly now: () => number;
 	private readonly over: (name: string, reason: string) => void;
 	private readonly near: (name: string, text: string) => void;
@@ -152,13 +154,32 @@ export class RunBudgets {
 
 	clear(): void {
 		for (const name of [...this.clocks.keys()]) this.end(name);
+		this.held.clear();
+	}
+
+	/**
+	 * The agents whose clock stops for a plan wait below them, though they run
+	 * (team.ts): one that leaves the set goes on as its state says.
+	 */
+	hold(names: ReadonlySet<string>, state: (name: string) => AgentState | undefined): void {
+		for (const name of [...this.held]) {
+			if (names.has(name)) continue;
+			this.held.delete(name);
+			const now = state(name);
+			if (now !== undefined) this.follow(name, now);
+		}
+		for (const name of names) {
+			if (this.held.has(name)) continue;
+			this.held.add(name);
+			this.pause(name);
+		}
 	}
 
 	/** The clock runs; after a pause, which moved the end on the wall clock, a long one is told the new end. */
 	private resume(name: string): void {
 		const clock = this.clocks.get(name);
 		const minutes = clock?.limits.minutes;
-		if (!clock || clock.since !== undefined || minutes === undefined) return;
+		if (!clock || clock.since !== undefined || minutes === undefined || this.held.has(name)) return;
 		const now = this.now();
 		const left = Math.max(0, minutes * MINUTE_MS - clock.usedMs);
 		const timer = setTimeout(() => this.expire(name, timeReason(minutes)), left);
