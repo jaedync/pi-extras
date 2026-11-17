@@ -2,6 +2,34 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.46.0 - 2026-11-17
+
+### Changed
+
+- Rate-limit Recovery: an interactive main session now waits for a provider
+  cooldown by default (`autoWait` defaults to `true`). Only
+  `"autoWait": false`, or `/rate-limit-recovery off`, turns it off.
+  Noninteractive sessions and subagents still never sleep.
+
+### Added
+
+- Subagents: a run that meets the ChatGPT plan usage limit, with no
+  fallback model left, waits in its parent for the reset and then goes on as
+  the same run on the same model.
+  - The child's own session still fails fast. The parent releases its slot
+    and session, and the child's work clock stops during the wait.
+  - The wait needs an exact reset from Codex, within `maxWaitSeconds`, and at
+    most `maxRecoveries` waits per run. A parent that is blocked on the child
+    stops its own clock too. An ancestor whose budget would end first makes
+    the run fail with the reason.
+  - A stop, a parent failure or a shutdown ends the wait. A message from
+    main, the parent or the user resumes the run at once.
+  - The child keeps its edit lock during the wait. A refusal says until when.
+  - `rateLimitRecovery.subagentPlanWait` turns it on or off. Unset, it follows
+    `autoWait`.
+  - The subagent host version is now 14: the first reload after the update
+    interrupts running children, then resumes them.
+
 ## 0.45.4 - 2026-11-17
 
 ### Fixed

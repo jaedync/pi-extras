@@ -2944,6 +2944,12 @@ run. The child itself still fails fast. The wait needs all of these:
 - No agent above it has less of its time budget left than the wait, while
   its clock still runs. That budget would end first and stop the run.
 
+Subagents have a 60-minute budget by default (`maxRunMinutes`). So a child
+of a subagent waits only when each agent above it waits on it (`wait: true`):
+their clocks stop during the wait. The check skips an agent above that is
+waiting or asking. If such an agent wakes during the wait and its budget
+ends, its wrap-up stops the waiting child.
+
 A fallback model goes first: the run waits only when no fallback is left.
 While it waits, the child is `queued` and its row says `waiting for the
 ChatGPT plan reset until 22:10 UTC`. It holds no slot and no session, and

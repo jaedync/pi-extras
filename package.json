@@ -1,6 +1,6 @@
 {
   "name": "pi-extras",
-  "version": "0.45.4",
+  "version": "0.46.0",
   "private": true,
   "description": "Optional status, usage limits, activity, search, shell tools, subagents, clearer tool rows and a quiet theme for Pi",
   "type": "module",
